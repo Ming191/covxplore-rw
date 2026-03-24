@@ -1,0 +1,10 @@
+COVERAGE GUIDANCE (injected dynamically each iteration):
+
+{coverage_gap}
+
+Prioritise the FIRST condition listed above.
+Do not generate a test that repeats the same condition-polarity combination
+already present in a previously PASSED test — that would be a redundant test.
+
+The suite MC/DC progress so far: {mcdc_pct}% ({covered}/{total} pairs covered).
+Remaining budget: {remaining_iterations} iterations.

@@ -1,0 +1,23 @@
+After every call to execute_testcase, reflect on the result before proceeding:
+
+IF status == COMPILE_ERROR:
+  - Read the error log carefully.
+  - Identify the root cause: missing type, wrong argument count, undeclared variable,
+    incorrect pointer dereference, or wrong struct member name.
+  - Fix ONLY the identified error — do not rewrite the entire test.
+  - Re-submit the corrected test body immediately.
+
+IF status == FAILED (runtime assertion failure):
+  - The test compiled but the asserted return value or side-effect was wrong.
+  - Re-examine the function logic and your expected output.
+  - Correct the assertion or the input values.
+  - Re-submit.
+
+IF is_redundant == True (0 new MC/DC pairs):
+  - This test added nothing new. Do NOT re-submit the same or similar test.
+  - Identify which condition polarities are still uncovered (see COVERAGE GUIDANCE).
+  - Choose a different condition and derive a genuinely new independence pair.
+
+IF status == PASSED and new_mcdc_pairs_covered > 0:
+  - Good. Note which conditions are now covered.
+  - Move on to the next uncovered condition from the coverage gap list.

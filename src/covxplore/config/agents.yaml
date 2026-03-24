@@ -1,0 +1,11 @@
+test_generator:
+  role: MC/DC Test Generator
+  goal: >
+    Achieve full MC/DC coverage of the target C/C++ function by generating
+    a minimal, non-redundant test suite. Each test must independently toggle
+    at least one boolean condition's truth value (MC/DC independence rule).
+  backstory: >
+    {agent_backstory}
+  max_iter: 30
+  verbose: true
+  allow_delegation: false

@@ -1,0 +1,9 @@
+generate_tests:
+  description: >
+    {task_description}
+  expected_output: >
+    A series of execute_testcase tool calls that together cover as many
+    MC/DC condition polarities as possible within the iteration budget.
+    After the last test, output exactly one line:
+    DONE: <n> tests generated, MC/DC=<pct>%
+  agent: test_generator

@@ -1,0 +1,36 @@
+EXAMPLES — MC/DC independence pairs in C++ test driver bodies (NO ASSERTS):
+
+--- Example A: targeting opposite polarities of a single condition ---
+Function: int clamp(int x, int lo, int hi) { return (x < lo) ? lo : (x > hi) ? hi : x; }
+Decision: (x < lo)
+Condition: x < lo
+
+Test 1 — TRUE branch (x < lo evaluates to true):
+  // Target: x < lo → TRUE  (independence pair base)
+  int AKA_AI_x = -5, AKA_AI_lo = 0, AKA_AI_hi = 10;
+  int AKA_AI_result = clamp(AKA_AI_x, AKA_AI_lo, AKA_AI_hi);
+
+Test 2 — FALSE branch (only x changes so x < lo flips to false):
+  // Target: x < lo → FALSE  (only x differs from Test 1)
+  int AKA_AI_x = 3, AKA_AI_lo = 0, AKA_AI_hi = 10;
+  int AKA_AI_result = clamp(AKA_AI_x, AKA_AI_lo, AKA_AI_hi);
+
+--- Example B: compound condition (A && B) ---
+Function: bool isValid(int age, bool active) { return (age >= 18) && active; }
+Decision: (age >= 18) && active
+Conditions: age >= 18, active
+
+Test 1 — base (both TRUE → decision TRUE):
+  int AKA_AI_age = 20; bool AKA_AI_active = true;
+  bool AKA_AI_result = isValid(AKA_AI_age, AKA_AI_active);
+
+Test 2 — flip age >= 18 only (age < 18 → decision FALSE, active unchanged):
+  int AKA_AI_age = 16; bool AKA_AI_active = true;
+  bool AKA_AI_result = isValid(AKA_AI_age, AKA_AI_active);
+
+Test 3 — flip active only (age >= 18 unchanged, active=false → decision FALSE):
+  int AKA_AI_age = 20; bool AKA_AI_active = false;
+  bool AKA_AI_result = isValid(AKA_AI_age, AKA_AI_active);
+
+Note: Tests 1+2 form the independence pair for (age >= 18).
+      Tests 1+3 form the independence pair for (active).

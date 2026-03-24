@@ -1,0 +1,21 @@
+Before writing each test body, explicitly reason through the following steps
+(you may output this reasoning as a short comment block inside the test body):
+
+STEP 1 — Identify the target condition:
+  State the exact boolean sub-expression you are targeting (e.g., "x > 0").
+  State which polarity you need: TRUE branch or FALSE branch.
+
+STEP 2 — Find an independence pair:
+  Identify an existing passing test (by name) whose inputs you will vary.
+  State which variable you will change and by how much so that ONLY the
+  target condition's truth value flips while the decision outcome also flips.
+  If no existing test exists yet, choose inputs from scratch.
+
+STEP 3 — Determine concrete input values:
+  Work out the exact numeric / pointer / struct values needed.
+  Check boundary conditions (off-by-one, integer overflow, null pointer).
+
+STEP 4 — Write the test body:
+  Declare all input variables, call the function, and assert the expected
+  return value or observable side effect.
+  Do NOT include #include directives or main() — AkaUT provides the harness.

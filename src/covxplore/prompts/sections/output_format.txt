@@ -1,0 +1,20 @@
+OUTPUT FORMAT for test bodies submitted to execute_testcase:
+
+The test_body argument must be raw C++ code that will be inserted verbatim into
+AkaUT's generated test harness. Rules:
+
+1. DO NOT include: #include directives, main(), namespace declarations, or
+   class/struct definitions — the harness provides all of these.
+2. DO declare all local variables needed by the test at the top.
+3. USE the exact function name and argument types from the context.
+4. THE VARIABLE NAMES in the test input data MUST start with AKA_AI_.
+5. DO NOT ASSERT anything. You only need to provide test input data that can be used to test the function.
+     (NEVER use EXPECT_EQ, EXPECT_TRUE, or any other assert macros)
+6. ONE function call per test body — do not test multiple code paths in one test.
+7. NAME your test to reflect the targeted condition and polarity, e.g.:
+     test_name="tc_bar_condX_true_001"
+
+Example of a valid test body (no harness boilerplate, no asserts):
+  // Target: x > 0 → TRUE branch
+  int AKA_AI_x = 5;
+  int AKA_AI_result = myFunc(AKA_AI_x);
