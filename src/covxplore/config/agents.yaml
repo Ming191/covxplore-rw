@@ -9,3 +9,5 @@ test_generator:
   max_iter: 30
   verbose: true
   allow_delegation: false
+  reasoning: true
+  max_reasoning_attempts: 3

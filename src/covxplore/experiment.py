@@ -1,16 +1,10 @@
 """Experiment data structures for the ablation study."""
 from __future__ import annotations
 
-import json
-import time
-import uuid
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Literal
 
 from covxplore.models import TestSuite
-from covxplore.prompts.config import PromptConfig
-
 
 StopReason = Literal["max_iter", "coverage_target", "agent_done", "error"]
 
@@ -23,7 +17,18 @@ class ExperimentConfig:
     prompt_variant: str                      # key in PromptRegistry.VARIANTS
     max_iterations: int = 15
     mcdc_target: float = 1.0
-    run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    run_id: str | None = None
+
+    def __post_init__(self):
+        if not self.run_id:
+            import re
+            import time
+            base = self.function_path.split("::")[-1].split("(")[0]
+            if not base:
+                base = "func"
+            safe_func = re.sub(r'[^a-zA-Z0-9]', '_', base).strip('_')
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            self.run_id = f"{ts}_{safe_func}"
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +49,9 @@ class ExperimentResult:
     stop_reason: StopReason
     error_message: str | None = None
 
+    crew_prompt_tokens: int | None = None
+    crew_completion_tokens: int | None = None
+
     # ------------------------------------------------------------------ #
     # Derived metrics (computed from suite)                               #
     # ------------------------------------------------------------------ #
@@ -58,10 +66,14 @@ class ExperimentResult:
 
     @property
     def total_input_tokens(self) -> int:
+        if self.crew_prompt_tokens is not None:
+            return self.crew_prompt_tokens
         return self.suite.total_input_tokens
 
     @property
     def total_output_tokens(self) -> int:
+        if self.crew_completion_tokens is not None:
+            return self.crew_completion_tokens
         return self.suite.total_output_tokens
 
     @property

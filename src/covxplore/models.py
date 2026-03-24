@@ -222,7 +222,7 @@ class TestSuite:
         """
         unvisited = self.unvisited_summary()
         if not unvisited:
-            return "All MC/DC conditions appear covered — try to verify with edge-case inputs."
+            return "SUCCESS! All MC/DC conditions are now covered (100%). DO NOT call any more tools. Please output your final 'DONE: ...' message immediately to finish the task."
 
         lines = ["The following MC/DC condition polarities are NOT yet covered:"]
         for item in unvisited[:8]:   # cap at 8 to stay within token budget

@@ -1,6 +1,4 @@
 """GetFunctionContextTool — wraps POST /api/context."""
-from typing import Type
-
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -21,7 +19,7 @@ class GetFunctionContextTool(BaseTool):
     """Fetch the dependency context for a C/C++ function from AkaUT.
 
     Use this FIRST when starting test generation for a new function.
-    The context includes: parameter types, return type, dependent structs/
+    The context includes: parameter types, return types, dependent structs/
     classes, stub information, and global variables — everything needed to
     write a compilable test driver.
     """
@@ -33,7 +31,7 @@ class GetFunctionContextTool(BaseTool):
         "start of test generation to understand the function's signature and "
         "all required input types."
     )
-    args_schema: Type[BaseModel] = _Input
+    args_schema: type[BaseModel] = _Input
 
     def _run(self, absolute_path: str) -> str:
         try:

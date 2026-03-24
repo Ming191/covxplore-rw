@@ -1,27 +1,3 @@
-"""AblationRunner — orchestrates single and matrix experiment runs.
-
-Usage (single run)::
-
-    from covxplore.ablation import AblationRunner
-    from covxplore.experiment import ExperimentConfig
-
-    runner = AblationRunner()
-    cfg = ExperimentConfig(
-        function_path="/project/src/foo.cpp\\\\MyNS::bar(int)",
-        prompt_variant="full",
-    )
-    result = runner.run_one(cfg)
-    print(result.to_summary_dict())
-
-Usage (full ablation matrix)::
-
-    results = runner.run_matrix(
-        function_path="...",
-        variants=["baseline", "s3_coverage", "no_cot", "full"],
-        repeat=3,
-    )
-    runner.export_results(results, Path("results/"))
-"""
 from __future__ import annotations
 
 import json
@@ -32,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from covxplore.config import get_settings
-from covxplore.crew import _StopGeneration, build_crew
+from covxplore.crew import build_crew
 from covxplore.experiment import ExperimentConfig, ExperimentResult
 from covxplore.models import TestSuite
 from covxplore.prompts.registry import VARIANTS, get_variant
@@ -45,10 +21,8 @@ class AblationRunner:
     """Runs one or many experiments and collects results."""
 
     def run_one(self, config: ExperimentConfig) -> ExperimentResult:
-        """Execute a single experiment run end-to-end.
-
-        Handles the crew lifecycle including early stopping via
-        ``_StopGeneration`` and unexpected errors.
+        """
+        Execute a single experiment run end-to-end.
         """
         cfg = get_settings()
         prompt_config = get_variant(config.prompt_variant)
@@ -62,12 +36,13 @@ class AblationRunner:
 
         stop_reason = "agent_done"
         error_msg = None
+        crew_prompt_tokens = None
+        crew_completion_tokens = None
+        crew_inst = None
 
         try:
             crew_inst, builder = build_crew(
-                function_path=config.function_path,
                 prompt_config=prompt_config,
-                suite=suite,
             )
             inputs = {
                 "agent_backstory": builder.system_prompt(),
@@ -79,22 +54,28 @@ class AblationRunner:
             }
             crew_inst.crew().kickoff(inputs=inputs)
 
-        except _StopGeneration as e:
-            stop_reason = e.reason
-            _console.print(
-                f"[yellow]Stopped: {stop_reason} after {suite.iteration_count} iterations[/]"
-            )
-
         except Exception as e:
             stop_reason = "error"
             error_msg = f"{type(e).__name__}: {e}"
             _console.print(f"[red]Error: {error_msg}[/]")
             traceback.print_exc()
 
-        # Retrieve the final suite (may have been updated by callbacks)
-        final_suite = get_shared_suite() or suite
+        finally:
+            if crew_inst is not None:
+                try:
+                    metrics = crew_inst.crew().usage_metrics
+                    if metrics:
+                        crew_prompt_tokens = metrics.prompt_tokens
+                        crew_completion_tokens = metrics.completion_tokens
+                except Exception:
+                    pass
 
-        # CrewAI swallows exceptions from step_callback, so we must deduce early stops manually
+            # Retrieve the final suite (may have been updated by callbacks)
+            final_suite = get_shared_suite() or suite
+            # Populate tokens from crew.usage_metrics to capture the total LLM interaction cost
+            _reconcile_tokens(crew_inst, final_suite)
+
+        # We must deduce early stops manually based on the final achieved coverage
         if final_suite.iteration_count >= config.max_iterations:
             stop_reason = "max_iter"
             error_msg = None  # Clear the artificial error message
@@ -109,6 +90,8 @@ class AblationRunner:
             suite=final_suite,
             stop_reason=stop_reason,
             error_message=error_msg,
+            crew_prompt_tokens=crew_prompt_tokens,
+            crew_completion_tokens=crew_completion_tokens,
         )
 
         _print_result_summary(result)
@@ -170,7 +153,7 @@ class AblationRunner:
         """
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Full JSON (one file per run + one aggregate)
+        # Full JSON (one file per run and one aggregate)
         all_summaries = []
         for r in results:
             summary = r.to_summary_dict()
@@ -203,9 +186,34 @@ class AblationRunner:
             )
 
 
-# ---------------------------------------------------------------------------
-# Pretty-print helpers
-# ---------------------------------------------------------------------------
+def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:
+    """Fallback token attribution after kickoff() completes.
+
+    Distributes the overall metrics.prompt_tokens and metrics.completion_tokens 
+    evenly across all non-COMPILE_ERROR tests in the suite.
+    """
+    if crew_inst is None:
+        return
+    if suite.total_input_tokens > 0 or suite.total_output_tokens > 0:
+        return
+    try:
+        metrics = crew_inst.crew().usage_metrics
+        total_prompt = getattr(metrics, "prompt_tokens", 0) or 0
+        total_completion = getattr(metrics, "completion_tokens", 0) or 0
+    except Exception:
+        return
+    if total_prompt == 0 and total_completion == 0:
+        return
+    eligible = [t for t in suite.tests if t.status != "COMPILE_ERROR"]
+    if not eligible:
+        return
+    n = len(eligible)
+    base_in, rem_in = divmod(total_prompt, n)
+    base_out, rem_out = divmod(total_completion, n)
+    for i, t in enumerate(eligible):
+        t.token_input = base_in + (rem_in if i == n - 1 else 0)
+        t.token_output = base_out + (rem_out if i == n - 1 else 0)
+
 
 def _print_result_summary(r: ExperimentResult) -> None:
     m = r.to_summary_dict()["metrics"]

@@ -1,6 +1,4 @@
 """GetNodeSourceTool — wraps GET /api/node/source."""
-from typing import Type
-
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -31,7 +29,7 @@ class GetNodeSourceTool(BaseTool):
         "enum, macro) identified by its absolutePath. Use this when the context "
         "references a type or dependency whose definition you need to understand."
     )
-    args_schema: Type[BaseModel] = _Input
+    args_schema: type[BaseModel] = _Input
 
     def _run(self, absolute_path: str) -> str:
         try:

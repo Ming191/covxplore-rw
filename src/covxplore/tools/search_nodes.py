@@ -1,6 +1,4 @@
 """SearchNodesTool — wraps POST /api/search."""
-from typing import Optional, Type
-
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -12,7 +10,7 @@ class _Input(BaseModel):
         ...,
         description="Substring / name to search for in the AST.",
     )
-    types: Optional[list[str]] = Field(
+    types: list[str] | None = Field(
         default=None,
         description=(
             "Optional list of node types to filter by. "
@@ -39,7 +37,7 @@ class SearchNodesTool(BaseTool):
         "Returns absolutePath values you can pass to get_node_source or "
         "get_function_context."
     )
-    args_schema: Type[BaseModel] = _Input
+    args_schema: type[BaseModel] = _Input
 
     def _run(self, query: str, types: list[str] | None = None) -> str:
         try:

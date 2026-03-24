@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import warnings
 from pathlib import Path
 
@@ -119,25 +118,51 @@ def run_ablation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy crewai entry points (kept for backward compatibility)
+# run_parallel  (covxplore-pipeline)
 # ---------------------------------------------------------------------------
 
-def run() -> None:
-    """Default entry point — delegates to run_generation."""
-    run_generation()
 
+def run_parallel() -> None:
+    """Parallel pipeline — run ablation for every function in a paths file."""
+    parser = argparse.ArgumentParser(
+        prog="covxplore-pipeline",
+        description=(
+            "Run MC/DC ablation for every function listed in a paths file, "
+            "in parallel. Results land in per-function subdirectories under --out, "
+            "and a combined pipeline_summary.csv is written to --out."
+        ),
+    )
+    parser.add_argument(
+        "--paths-file", "-f", required=True,
+        help="Text file listing function paths (one per line; lines starting with # are ignored).",
+    )
+    parser.add_argument(
+        "--workers", "-w", type=int, default=3,
+        help="Maximum number of functions to process concurrently (default: 3).",
+    )
+    parser.add_argument(
+        "--variants", nargs="+", default=None,
+        help="Prompt variant names to run. Defaults to all variants.",
+    )
+    parser.add_argument(
+        "--repeat", "-r", type=int, default=None,
+        help="Repetitions per variant. Defaults to Settings.ablation_repeat.",
+    )
+    parser.add_argument(
+        "--out", "-o", default="results",
+        help="Root output directory. Each function gets a subdirectory (default: results).",
+    )
+    args = parser.parse_args()
 
-def train() -> None:
-    cfg_args = sys.argv[1:]
-    if len(cfg_args) < 2:
-        print("Usage: train <n_iterations> <filename>")
-        sys.exit(1)
-    print("Training not supported in covxplore v0.2; use run_generation instead.")
+    from covxplore.pipeline import ParallelPipeline
 
+    pipeline = ParallelPipeline(
+        paths_file=Path(args.paths_file),
+        out_dir=Path(args.out),
+        variants=args.variants,
+        repeat=args.repeat,
+        max_workers=args.workers,
+    )
+    summary_path = pipeline.run()
+    print(f"\nPipeline complete. Summary: {summary_path}")
 
-def replay() -> None:
-    print("Replay not supported in covxplore v0.2.")
-
-
-def test() -> None:
-    print("Use covxplore-gen or covxplore-ablate instead.")

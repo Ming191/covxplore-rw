@@ -1,12 +1,11 @@
 """
 Synchronous HTTP client for the AkaUT Spring Boot REST API.
 
-All methods raise ``AkaUTError`` on non-2xx responses so callers can
+All methods raise ``AkaUTError`` on non-2xx responses, so callers can
 catch a single exception type without inspecting status codes.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 

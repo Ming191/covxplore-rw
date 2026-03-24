@@ -1,20 +1,7 @@
-"""ExecuteTestcaseTool — wraps POST /api/testcase/execute.
-
-This is the core feedback tool. After execution it:
-  1. Deserialises the AkaUT response into a TestResult.
-  2. Calls TestSuite.add_result() to update global MC/DC tracking.
-  3. Returns a *compact* summary string to the agent (not the full JSON) to
-     avoid flooding the context window.
-
-The shared TestSuite is stored as a module-level singleton so it persists
-across multiple tool calls within one generation run. Call
-``reset_shared_suite(function_path)`` at the start of each run.
-"""
 from __future__ import annotations
 
+import threading
 import time
-from typing import Optional, Type
-
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -29,26 +16,16 @@ from covxplore.models import (
     UnvisitedMcdc,
 )
 
-# ---------------------------------------------------------------------------
-# Shared suite singleton (one per generation run)
-# ---------------------------------------------------------------------------
-
-_shared_suite: TestSuite | None = None
+_tls = threading.local()
 
 
 def get_shared_suite() -> TestSuite | None:
-    return _shared_suite
+    return getattr(_tls, "suite", None)
 
 
 def reset_shared_suite(function_path: str) -> TestSuite:
-    global _shared_suite
-    _shared_suite = TestSuite(function_path=function_path)
-    return _shared_suite
-
-
-# ---------------------------------------------------------------------------
-# Tool input schema
-# ---------------------------------------------------------------------------
+    _tls.suite = TestSuite(function_path=function_path)
+    return _tls.suite
 
 class _Input(BaseModel):
     absolute_path: str = Field(
@@ -67,7 +44,7 @@ class _Input(BaseModel):
             "include guards — AkaUT wraps the body automatically."
         ),
     )
-    test_name: Optional[str] = Field(
+    test_name: str | None = Field(
         default=None,
         description="Optional test case name (auto-generated if omitted).",
     )
@@ -98,7 +75,7 @@ class ExecuteTestcaseTool(BaseTool):
         "delta, and a list of still-unvisited condition polarities. Use the "
         "unvisited list to guide your next test."
     )
-    args_schema: Type[BaseModel] = _Input
+    args_schema: type[BaseModel] = _Input
 
     def _run(
         self,
@@ -107,7 +84,7 @@ class ExecuteTestcaseTool(BaseTool):
         test_name: str | None = None,
     ) -> str:
         cfg = get_settings()
-        suite = _shared_suite
+        suite = get_shared_suite()
 
         t0 = time.monotonic()
         try:
@@ -135,9 +112,6 @@ class ExecuteTestcaseTool(BaseTool):
 
         elapsed = (time.monotonic() - t0) * 1000
 
-        # ---------------------------------------------------------------- #
-        # Deserialise into TestResult                                       #
-        # ---------------------------------------------------------------- #
         result = TestResult(
             test_name=raw.test_name,
             test_body=test_body,

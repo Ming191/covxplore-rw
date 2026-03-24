@@ -28,15 +28,14 @@ def _load_section(name: str) -> str:
 class PromptBuilder:
     """Builds agent system prompt and task description from a PromptConfig.
 
-    Usage::
+    Usage:
 
-        builder = PromptBuilder(config)
+        Builder = PromptBuilder(config)
         system_prompt = builder.system_prompt()
         task_desc = builder.task_description(
             function_path=...,
             suite=...,
-            remaining_iterations=...,
-        )
+            remaining_iterations=...)
     """
 
     def __init__(self, config: PromptConfig):
@@ -65,22 +64,19 @@ class PromptBuilder:
         """Assemble the task description, injecting live coverage state."""
         from covxplore.models import TestSuite  # local import to avoid circular
 
-        parts: list[str] = []
+        parts: list[str] = [f"Generate MC/DC-covering test cases for the function at:\n"
+                            f"  {function_path}\n\n"
+                            "Workflow:\n"
+                            "1. Call get_function_context to understand the function signature and types.\n"
+                            "2. Call get_node_source on the same path to read the function body.\n"
+                            "3. If the context references unknown types or helpers, call search_nodes "
+                            "then get_node_source to resolve them.\n"
+                            "4. Write a test body and call execute_testcase.\n"
+                            "5. After each execution, use the coverage feedback to target the next "
+                            "uncovered condition.\n"
+                            "6. Stop when all MC/DC conditions are covered or the iteration budget is exhausted."]
 
-        # Always include the objective
-        parts.append(
-            f"Generate MC/DC-covering test cases for the function at:\n"
-            f"  {function_path}\n\n"
-            "Workflow:\n"
-            "1. Call get_function_context to understand the function signature and types.\n"
-            "2. Call get_node_source on the same path to read the function body.\n"
-            "3. If the context references unknown types or helpers, call search_nodes "
-            "then get_node_source to resolve them.\n"
-            "4. Write a test body and call execute_testcase.\n"
-            "5. After each execution, use the coverage feedback to target the next "
-            "uncovered condition.\n"
-            "6. Stop when all MC/DC conditions are covered or the iteration budget is exhausted."
-        )
+        # Always include the goal
 
         # Dynamic coverage guidance
         if self.config.coverage_guidance and suite is not None:
@@ -99,7 +95,7 @@ class PromptBuilder:
             )
             parts.append(section_text)
 
-        # Self-reflection (static text, included in task not system prompt)
+        # Self-reflection (static text, included in a task, not system prompt)
         if self.config.self_reflection:
             parts.append(_load_section("self_reflection"))
 

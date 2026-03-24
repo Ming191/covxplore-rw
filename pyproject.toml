@@ -5,7 +5,7 @@ description = "MC/DC coverage-driven test generation agent for C/C++ (ablation s
 authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "crewai[litellm]==1.8.1",
+    "crewai[litellm]",
     "httpx>=0.27.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
@@ -15,13 +15,9 @@ dependencies = [
 ]
 
 [project.scripts]
-covxplore         = "covxplore.main:run"
-covxplore-gen     = "covxplore.main:run_generation"
-covxplore-ablate  = "covxplore.main:run_ablation"
-run_crew          = "covxplore.main:run"
-train             = "covxplore.main:train"
-replay            = "covxplore.main:replay"
-test              = "covxplore.main:test"
+covxplore-gen      = "covxplore.main:run_generation"
+covxplore-ablate   = "covxplore.main:run_ablation"
+covxplore-pipeline = "covxplore.main:run_parallel"
 
 [build-system]
 requires = ["hatchling"]
