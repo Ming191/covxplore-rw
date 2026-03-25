@@ -7,13 +7,18 @@ IF status == COMPILE_ERROR:
   - Fix ONLY the identified error — do not rewrite the entire test.
   - Re-submit the corrected test body immediately.
 
-IF status == FAILED (runtime assertion failure):
-  - The test compiled but the asserted return value or side-effect was wrong.
-  - Re-examine the function logic and your expected output.
-  - Correct the assertion or the input values.
-  - Re-submit.
+IF status == FAILED:
+  - Read execute_log fully and identify the exact failing step.
+  - Treat this as execution failure details, not a stop condition.
+  - Fix the blocking issue and continue coverage-driven generation.
 
-IF is_redundant == True (0 new MC/DC pairs):
+IF status == RUNTIME_ERROR:
+  - Treat this as a non-clean execution bucket (runtime/assertion/tooling).
+  - If new_mcdc_pairs_covered > 0, keep the coverage gain and continue.
+  - If new_mcdc_pairs_covered == 0, inspect execute_log and fix only the blocking issue.
+  - Stay focused on maximizing coverage, not assertion semantics.
+
+IF is_redundant == True (zero new MC/DC pairs):
   - This test added nothing new. Do NOT re-submit the same or similar test.
   - Identify which condition polarities are still uncovered (see COVERAGE GUIDANCE).
   - Choose a different condition and derive a genuinely new independence pair.

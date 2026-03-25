@@ -6,7 +6,6 @@ test_generator:
     at least one boolean condition's truth value (MC/DC independence rule).
   backstory: >
     {agent_backstory}
-  max_iter: 30
   verbose: true
   allow_delegation: false
   reasoning: true

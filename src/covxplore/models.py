@@ -20,6 +20,8 @@ from typing import NamedTuple
 
 from pydantic import BaseModel, Field
 
+from covxplore.status import TestStatus, normalize_test_status
+
 
 # ---------------------------------------------------------------------------
 # Primitives mirroring the AkaUT REST response shape
@@ -76,7 +78,7 @@ class ConditionKey(NamedTuple):
 class TestResult(BaseModel):
     test_name: str
     test_body: str
-    status: str                                  # PASSED | FAILED | COMPILE_ERROR | UNKNOWN
+    status: str                                  # PASSED | FAILED | RUNTIME_ERROR | COMPILE_ERROR | UNKNOWN
     execute_log: str | None = None
 
     statement_coverage: CoverageDetail = Field(default_factory=CoverageDetail)
@@ -98,7 +100,7 @@ class TestResult(BaseModel):
     iteration: int = 0
 
     def condition_keys(self) -> set[ConditionKey]:
-        """Return all (condition, polarity) keys covered by this test."""
+        """Return (condition, polarity) keys visited by this test via unvisited_mcdc."""
         keys: set[ConditionKey] = set()
         for entry in self.unvisited_mcdc:
             if entry.true_branch_visited:
@@ -116,8 +118,9 @@ class TestResult(BaseModel):
 class TestSuite:
     """Tracks the live state of all generated tests during a generation run.
 
-    Only TestResult objects whose ``status`` is not COMPILE_ERROR are
+    Only TestResult objects whose ``status`` is PASSED or RUNTIME_ERROR are
     considered for coverage bookkeeping (they still go into ``tests``).
+    FAILED is tracked for diagnostics but intentionally excluded from coverage deltas.
     """
 
     function_path: str
@@ -125,6 +128,7 @@ class TestSuite:
     tests: list[TestResult] = field(default_factory=list)
     covered_keys: set[ConditionKey] = field(default_factory=set)
     total_mcdc_conditions: int = 0   # total unique ConditionKeys possible (set after first exec)
+    all_conditions: list[str] = field(default_factory=list)  # authoritative condition list from static CFG
     iteration_count: int = 0
     started_at: float = field(default_factory=time.monotonic)
 
@@ -137,8 +141,19 @@ class TestSuite:
         self.iteration_count += 1
         result.iteration = self.iteration_count
 
-        if result.status not in ("COMPILE_ERROR",):
-            new_keys = result.condition_keys() - self.covered_keys
+        normalized = normalize_test_status(result.status)
+        if normalized in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}:
+            raw_keys = result.condition_keys()
+
+            if self.all_conditions and result.unvisited_mcdc is not None:
+                unvisited_cond_set = {u.condition for u in result.unvisited_mcdc}
+                for cond in self.all_conditions:
+                    if cond not in unvisited_cond_set:
+                        # Not in unvisited list → both branches covered in this test
+                        raw_keys.add(ConditionKey(cond, True))
+                        raw_keys.add(ConditionKey(cond, False))
+
+            new_keys = raw_keys - self.covered_keys
             result.new_mcdc_pairs_covered = len(new_keys)
             result.is_redundant = (
                 len(new_keys) == 0
@@ -146,9 +161,7 @@ class TestSuite:
             )
             self.covered_keys |= new_keys
 
-            # Update total from the first passing result that has trace data
             if self.total_mcdc_conditions == 0 and result.condition_trace:
-                # Total possible keys = 2 per condition (true + false)
                 unique_conditions = {e.condition for e in result.condition_trace}
                 self.total_mcdc_conditions = len(unique_conditions) * 2
 
@@ -192,23 +205,16 @@ class TestSuite:
     # ------------------------------------------------------------------ #
 
     def unvisited_summary(self) -> list[dict]:
-        """Return the real unvisited MC/DC conditions by combining the 
-        function's full condition list with the suite's covered_keys."""
-        if not self.tests:
-            return []
-        last = self.tests[-1]
-        
+        """Return unvisited MC/DC conditions against suite's covered_keys.
+        Requires all_conditions to be pre-populated by _prefetch_conditions().
+        """
         result = []
-        for u in last.unvisited_mcdc:
-            globally_covered_true = ConditionKey(u.condition, True) in self.covered_keys
-            globally_covered_false = ConditionKey(u.condition, False) in self.covered_keys
-            
-            needs_true = not globally_covered_true
-            needs_false = not globally_covered_false
-            
+        for cond in self.all_conditions:
+            needs_true = ConditionKey(cond, True) not in self.covered_keys
+            needs_false = ConditionKey(cond, False) not in self.covered_keys
             if needs_true or needs_false:
                 result.append({
-                    "condition": u.condition,
+                    "condition": cond,
                     "needs_true": needs_true,
                     "needs_false": needs_false,
                 })
@@ -220,9 +226,53 @@ class TestSuite:
         This is the CoverAgent-style local gap injection (arxiv:2402.09171):
         *specific condition at specific location* rather than a global goal.
         """
+        if not self.tests:
+            if self.total_mcdc_conditions > 0:
+                return (
+                    f"No tests executed yet. Target is {self.total_mcdc_conditions} MC/DC pairs. "
+                    "Do NOT stop. Generate and execute a first compilable test case."
+                )
+            return (
+                "No tests executed yet and total MC/DC target is unknown. "
+                "Do NOT stop. Call get_conditions_static, then execute a compilable test."
+            )
+
+        last = self.tests[-1]
+        if last.status == TestStatus.COMPILE_ERROR.value:
+            return (
+                "Last execution status is COMPILE_ERROR. Coverage is not complete. "
+                "Do NOT stop. Fix compilation issues and re-run execute_testcase."
+            )
+        if last.status == TestStatus.FAILED.value:
+            return (
+                "Last execution status is FAILED. Coverage is not complete. "
+                "Inspect execute_log and continue with the next test."
+            )
+        if last.status == TestStatus.UNKNOWN.value:
+            return (
+                "Last execution status is UNKNOWN. Coverage state may be incomplete. "
+                "Do NOT stop. Re-run with a valid test and continue."
+            )
+
+        if (
+            self.total_mcdc_conditions > 0
+            and len(self.covered_keys) >= self.total_mcdc_conditions
+        ):
+            return "SUCCESS! All MC/DC conditions are now covered (100%). DO NOT call any more tools. Please output your final 'DONE: ...' message immediately to finish the task."
+
         unvisited = self.unvisited_summary()
         if not unvisited:
-            return "SUCCESS! All MC/DC conditions are now covered (100%). DO NOT call any more tools. Please output your final 'DONE: ...' message immediately to finish the task."
+            if self.total_mcdc_conditions > 0:
+                remaining = max(self.total_mcdc_conditions - len(self.covered_keys), 0)
+                return (
+                    f"Coverage details for the last execution are incomplete. "
+                    f"Still need at least {remaining} MC/DC pairs. "
+                    "Do NOT stop. Run another compilable test and continue coverage."
+                )
+            return (
+                "Coverage details are incomplete and total MC/DC target is unknown. "
+                "Do NOT stop. Continue with compilable executions until coverage data is available."
+            )
 
         lines = ["The following MC/DC condition polarities are NOT yet covered:"]
         for item in unvisited[:8]:   # cap at 8 to stay within token budget
@@ -233,8 +283,10 @@ class TestSuite:
                 missing.append("FALSE branch")
             lines.append(f"  • {item['condition']!r} — missing: {', '.join(missing)}")
         lines.append(
-            "\nTarget the FIRST uncovered condition. Generate a test where ONLY that "
-            "condition's value changes relative to an existing passing test (MC/DC independence rule)."
+            "\nTarget the test path that satisfies the highest number of conditions. "
+            "Prioritize paths that cover multiple uncovered conditions simultaneously. "
+            "If multiple paths are possible, choose the one that increases overall condition coverage the most. "
+            "Prefer modifying an existing passing test when possible, but allow generating a new test if needed."
         )
         return "\n".join(lines)
 

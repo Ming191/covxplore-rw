@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from covxplore.config import get_settings
+from covxplore.status import normalize_test_status
 
 
 class AkaUTError(Exception):
@@ -76,7 +77,7 @@ class ExecuteResult:
 
     @property
     def status(self) -> str:
-        return self.raw.get("status", "UNKNOWN")
+        return normalize_test_status(self.raw.get("status")).value
 
     @property
     def execute_log(self) -> str:

@@ -11,6 +11,7 @@ from covxplore.config import get_settings
 from covxplore.crew import build_crew
 from covxplore.experiment import ExperimentConfig, ExperimentResult
 from covxplore.models import TestSuite
+from covxplore.status import TestStatus
 from covxplore.prompts.registry import VARIANTS, get_variant
 from covxplore.tools.execute_testcase import get_shared_suite, reset_shared_suite
 
@@ -39,11 +40,13 @@ class AblationRunner:
         error_msg = None
         crew_prompt_tokens = None
         crew_completion_tokens = None
+        tracing_url = None
         crew_inst = None
 
         try:
             crew_inst, builder = build_crew(
                 prompt_config=prompt_config,
+                max_iterations=config.max_iterations,
             )
             inputs = {
                 "agent_backstory": builder.system_prompt(),
@@ -70,16 +73,17 @@ class AblationRunner:
                         crew_completion_tokens = metrics.completion_tokens
                 except Exception:
                     pass
-
-            # Retrieve the final suite (may have been updated by callbacks)
+                try:
+                    tracing_url = getattr(crew_inst.crew(), "_telemetry_url", None)
+                except Exception:
+                    pass
             final_suite = get_shared_suite() or suite
-            # Populate tokens from crew.usage_metrics to capture the total LLM interaction cost
             _reconcile_tokens(crew_inst, final_suite)
 
         # We must deduce early stops manually based on the final achieved coverage
         if final_suite.iteration_count >= config.max_iterations:
             stop_reason = "max_iter"
-            error_msg = None  # Clear the artificial error message
+            error_msg = None
             _console.print(f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]")
         elif final_suite.mcdc_coverage_pct >= config.mcdc_target or (
             final_suite.iteration_count > 0
@@ -97,6 +101,7 @@ class AblationRunner:
             error_message=error_msg,
             crew_prompt_tokens=crew_prompt_tokens,
             crew_completion_tokens=crew_completion_tokens,
+            tracing_url=tracing_url,
         )
 
         _print_result_summary(result)
@@ -204,6 +209,7 @@ def _prefetch_conditions(suite: "TestSuite") -> None:
             result = client.get_node_conditions(suite.function_path)
         if result.total_mcdc_pairs > 0:
             suite.total_mcdc_conditions = result.total_mcdc_pairs
+            suite.all_conditions = [c.condition for c in result.conditions]
             _console.print(
                 f"[dim]Static CFG: {result.total_conditions} conditions "
                 f"({result.total_mcdc_pairs} MC/DC pairs)[/]"
@@ -216,7 +222,7 @@ def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:
     """Fallback token attribution after kickoff() completes.
 
     Distributes the overall metrics.prompt_tokens and metrics.completion_tokens 
-    evenly across all non-COMPILE_ERROR tests in the suite.
+    evenly across all PASSED/RUNTIME_ERROR tests in the suite.
     """
     if crew_inst is None:
         return
@@ -230,7 +236,10 @@ def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:
         return
     if total_prompt == 0 and total_completion == 0:
         return
-    eligible = [t for t in suite.tests if t.status != "COMPILE_ERROR"]
+    eligible = [
+        t for t in suite.tests
+        if t.status in {TestStatus.PASSED.value, TestStatus.RUNTIME_ERROR.value}
+    ]
     if not eligible:
         return
     n = len(eligible)

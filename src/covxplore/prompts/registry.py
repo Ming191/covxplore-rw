@@ -154,3 +154,10 @@ def get_variant(name: str) -> PromptConfig:
         available = ", ".join(sorted(VARIANTS))
         raise KeyError(f"Unknown prompt variant {name!r}. Available: {available}")
     return VARIANTS[name]
+
+
+def get_leave_one_out_variants() -> list[str]:
+    """Return leave-one-out preset: full refs + full-minus-one variants."""
+    refs = [name for name in ("full", "full_shots") if name in VARIANTS]
+    loo = [name for name in VARIANTS if name.startswith("no_")]
+    return refs + loo

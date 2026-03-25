@@ -15,6 +15,7 @@ class CovxploreCrew:
     Parameters passed at construction time (not from YAML):
       tools          — the 4 AkaUT REST-API tools
       llm            — LLM instance or model string; defaults to Settings values
+      max_iterations — run-level iteration cap for the agent loop
     """
 
     agents_config = "config/agents.yaml"
@@ -27,10 +28,18 @@ class CovxploreCrew:
         self,
         tools: list[BaseTool],
         llm: LLM | str | None = None,
+        max_iterations: int | None = None,
     ):
         self._tools = tools
 
         cfg = get_settings()
+        resolved_max_iterations = (
+            max_iterations if max_iterations is not None else cfg.max_iterations
+        )
+        if resolved_max_iterations <= 0:
+            raise ValueError("max_iterations must be > 0")
+        self._max_iterations = resolved_max_iterations
+
         if isinstance(llm, LLM):
             self._llm = llm
         else:
@@ -40,6 +49,7 @@ class CovxploreCrew:
                 model=model,
                 api_key=cfg.deepseek_api_key,
                 base_url=cfg.deepseek_base_url,
+                max_tokens=cfg.max_tokens,
             )
 
     @agent
@@ -48,7 +58,7 @@ class CovxploreCrew:
             config=self.agents_config["test_generator"],  # type: ignore[index]
             tools=self._tools,
             llm=self._llm,
-            max_iter=get_settings().max_iterations,
+            max_iter=self._max_iterations,
         )
 
     @task
@@ -71,6 +81,8 @@ class CovxploreCrew:
 
 def build_crew(
     prompt_config,  # PromptConfig
+    *,
+    max_iterations: int | None = None,
 ) -> tuple["CovxploreCrew", object]:  # (crew_instance, builder)
     """Create a ``CovxploreCrew`` + ``PromptBuilder`` for one generation run.
 
@@ -105,5 +117,5 @@ def build_crew(
     ]
 
     crew_inst: CovxploreCrew | None = None
-    crew_inst = CovxploreCrew(tools)
+    crew_inst = CovxploreCrew(tools, max_iterations=max_iterations)
     return crew_inst, builder

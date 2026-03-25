@@ -15,6 +15,7 @@ from covxplore.models import (
     TraceSummary,
     UnvisitedMcdc,
 )
+from covxplore.status import TestStatus, is_failure_status
 
 _tls = threading.local()
 
@@ -71,7 +72,7 @@ class ExecuteTestcaseTool(BaseTool):
     name: str = "execute_testcase"
     description: str = (
         "Compile and execute a C++ test driver body for the target function. "
-        "Returns execution status (PASSED/FAILED/COMPILE_ERROR), MC/DC coverage "
+        "Returns execution status (PASSED/FAILED/RUNTIME_ERROR/COMPILE_ERROR), MC/DC coverage "
         "delta, and a list of still-unvisited condition polarities. Use the "
         "unvisited list to guide your next test."
     )
@@ -98,7 +99,7 @@ class ExecuteTestcaseTool(BaseTool):
             failed = TestResult(
                 test_name=test_name or "unknown",
                 test_body=test_body,
-                status="COMPILE_ERROR",
+                status=TestStatus.COMPILE_ERROR.value,
                 execute_log=str(exc),
                 elapsed_ms=elapsed,
             )
@@ -196,9 +197,8 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
         lines.append("")
         lines.append(gap)
 
-    # Log excerpt on failure
-    if result.status in ("FAILED", "COMPILE_ERROR") and result.execute_log:
-        excerpt = result.execute_log[:500].strip()
-        lines.append(f"\nExecution log (truncated):\n{excerpt}")
+    # Send full failure logs so the LLM can diagnose root causes precisely.
+    if is_failure_status(result.status) and result.execute_log:
+        lines.append(f"\nExecution log:\n{result.execute_log.strip()}")
 
     return "\n".join(lines)

@@ -19,6 +19,11 @@ covxplore-ablate
             --variants full no_cot no_coverage baseline \\
             --repeat 3 \\
             --out results/
+        covxplore-ablate \\
+            --path "/project/src/foo.cpp\\MyNS::bar(int)" \\
+            --leave-one-out \\
+            --repeat 3 \\
+            --out results/
 """
 from __future__ import annotations
 
@@ -72,7 +77,7 @@ def run_generation() -> None:
     exp_cfg = ExperimentConfig(
         function_path=args.path,
         prompt_variant=variant,
-        max_iterations=args.max_iter or cfg.max_iterations,
+        max_iterations=args.max_iter if args.max_iter is not None else cfg.max_iterations,
         mcdc_target=args.mcdc_target if args.mcdc_target is not None else cfg.mcdc_target,
     )
 
@@ -102,16 +107,27 @@ def run_ablation() -> None:
         "--variants", nargs="+", default=None,
         help="Variant names to include. Defaults to all variants.",
     )
+    parser.add_argument(
+        "--leave-one-out", "--loo",
+        action="store_true",
+        help="Run leave-one-out preset: full, full_shots, and all variants starting with 'no_'.",
+    )
     parser.add_argument("--repeat", "-r", type=int, default=None)
     parser.add_argument("--out", "-o", default="results")
     args = parser.parse_args()
 
     from covxplore.ablation import AblationRunner
+    from covxplore.prompts.registry import get_leave_one_out_variants
+
+    if args.leave_one_out and args.variants:
+        parser.error("Use either --variants or --leave-one-out, not both.")
+
+    variants = get_leave_one_out_variants() if args.leave_one_out else args.variants
 
     runner = AblationRunner()
     results = runner.run_matrix(
         function_path=args.path,
-        variants=args.variants,
+        variants=variants,
         repeat=args.repeat,
     )
     runner.export_results(results, Path(args.out))
@@ -145,6 +161,11 @@ def run_parallel() -> None:
         help="Prompt variant names to run. Defaults to all variants.",
     )
     parser.add_argument(
+        "--leave-one-out", "--loo",
+        action="store_true",
+        help="Run leave-one-out preset: full, full_shots, and all variants starting with 'no_'.",
+    )
+    parser.add_argument(
         "--repeat", "-r", type=int, default=None,
         help="Repetitions per variant. Defaults to Settings.ablation_repeat.",
     )
@@ -155,11 +176,17 @@ def run_parallel() -> None:
     args = parser.parse_args()
 
     from covxplore.pipeline import ParallelPipeline
+    from covxplore.prompts.registry import get_leave_one_out_variants
+
+    if args.leave_one_out and args.variants:
+        parser.error("Use either --variants or --leave-one-out, not both.")
+
+    variants = get_leave_one_out_variants() if args.leave_one_out else args.variants
 
     pipeline = ParallelPipeline(
         paths_file=Path(args.paths_file),
         out_dir=Path(args.out),
-        variants=args.variants,
+        variants=variants,
         repeat=args.repeat,
         max_workers=args.workers,
     )

@@ -1,10 +1,12 @@
 """Experiment data structures for the ablation study."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
+from covxplore.config import get_settings
 from covxplore.models import TestSuite
+from covxplore.status import TestStatus
 
 StopReason = Literal["max_iter", "coverage_target", "agent_done", "error"]
 
@@ -15,8 +17,8 @@ class ExperimentConfig:
 
     function_path: str
     prompt_variant: str                      # key in PromptRegistry.VARIANTS
-    max_iterations: int = 15
-    mcdc_target: float = 1.0
+    max_iterations: int = field(default_factory=lambda: get_settings().max_iterations)
+    mcdc_target: float = field(default_factory=lambda: get_settings().mcdc_target)
     run_id: str | None = None
 
     def __post_init__(self):
@@ -51,6 +53,7 @@ class ExperimentResult:
 
     crew_prompt_tokens: int | None = None
     crew_completion_tokens: int | None = None
+    tracing_url: str | None = None  # CrewAI trace URL if tracing was enabled
 
     # ------------------------------------------------------------------ #
     # Derived metrics (computed from suite)                               #
@@ -107,6 +110,7 @@ class ExperimentResult:
                 "elapsed_sec": self.elapsed_sec,
                 "iterations_used": self.iterations_used,
             },
+            "tracing_url": self.tracing_url,
             "test_suite": [
                 {
                     "test_name": t.test_name,
@@ -119,6 +123,9 @@ class ExperimentResult:
                     "token_output": t.token_output,
                     "execute_log": t.execute_log,
                     "test_body": t.test_body,
+                    "mcdc_coverage": t.mcdc_coverage.model_dump(),
+                    "statement_coverage": t.statement_coverage.model_dump(),
+                    "branch_coverage": t.branch_coverage.model_dump(),
                 }
                 for t in self.suite.tests
             ],
@@ -141,7 +148,8 @@ class ExperimentResult:
             "elapsed_sec": self.elapsed_sec,
             "iterations_used": self.iterations_used,
             "num_tests": len(self.suite.tests),
-            "num_passing": sum(1 for t in self.suite.tests if t.status == "PASSED"),
+            "num_passing": sum(1 for t in self.suite.tests if t.status == TestStatus.PASSED.value),
             "num_redundant": sum(1 for t in self.suite.tests if t.is_redundant),
             "error": self.error_message or "",
+            "tracing_url": self.tracing_url or "",
         }
