@@ -46,6 +46,26 @@ class SourceResult:
 
 
 @dataclass
+class ConditionInfo:
+    condition: str
+    line_in_function: int | None
+    start_offset: int | None
+    end_offset: int | None
+
+
+@dataclass
+class ConditionsResult:
+    absolute_path: str
+    total_conditions: int
+    conditions: list[ConditionInfo]
+
+    @property
+    def total_mcdc_pairs(self) -> int:
+        """Each condition requires true + false branch → 2 pairs each."""
+        return self.total_conditions * 2
+
+
+@dataclass
 class ExecuteResult:
     """Raw deserialized JSON from POST /api/testcase/execute."""
     raw: dict[str, Any]
@@ -146,6 +166,7 @@ class AkaUTClient:
 
     def get_function_context(self, absolute_path: str) -> ContextResult:
         """POST /api/context — returns the dependency context for a function."""
+        absolute_path = absolute_path.replace("\\", "/")
         data = self._post("/api/context", {"absolutePath": absolute_path})
         if "error" in data:
             raise AkaUTError(data["error"])
@@ -153,6 +174,7 @@ class AkaUTClient:
 
     def get_node_source(self, absolute_path: str) -> SourceResult:
         """GET /api/node/source — returns raw C/C++ source of a node."""
+        absolute_path = absolute_path.replace("\\", "/")
         data = self._get("/api/node/source", {"absolutePath": absolute_path})
         if "error" in data:
             raise AkaUTError(data["error"])
@@ -184,6 +206,26 @@ class AkaUTClient:
             for item in (data or [])
         ]
 
+    def get_node_conditions(self, absolute_path: str) -> ConditionsResult:
+        """GET /api/node/conditions — returns all MC/DC conditions via static CFG analysis."""
+        absolute_path = absolute_path.replace("\\", "/")
+        data = self._get("/api/node/conditions", {"absolutePath": absolute_path})
+        if "error" in data:
+            raise AkaUTError(data["error"])
+        return ConditionsResult(
+            absolute_path=data["absolutePath"],
+            total_conditions=data["totalConditions"],
+            conditions=[
+                ConditionInfo(
+                    condition=c["condition"],
+                    line_in_function=c.get("lineInFunction"),
+                    start_offset=c.get("startOffset"),
+                    end_offset=c.get("endOffset"),
+                )
+                for c in (data.get("conditions") or [])
+            ],
+        )
+
     def execute_testcase(
         self,
         absolute_path: str,
@@ -191,6 +233,7 @@ class AkaUTClient:
         test_name: str | None = None,
     ) -> ExecuteResult:
         """POST /api/testcase/execute — compile, run, and return coverage."""
+        absolute_path = absolute_path.replace("\\", "/")
         payload: dict[str, Any] = {
             "absolutePath": absolute_path,
             "testBody": test_body,

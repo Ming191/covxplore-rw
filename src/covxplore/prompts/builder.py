@@ -67,14 +67,16 @@ class PromptBuilder:
         parts: list[str] = [f"Generate MC/DC-covering test cases for the function at:\n"
                             f"  {function_path}\n\n"
                             "Workflow:\n"
-                            "1. Call get_function_context to understand the function signature and types.\n"
-                            "2. Call get_node_source on the same path to read the function body.\n"
-                            "3. If the context references unknown types or helpers, call search_nodes "
+                            "1. Call get_conditions_static to get the full list of MC/DC conditions "
+                            "that must be covered — do this FIRST so you know the coverage target.\n"
+                            "2. Call get_function_context to understand the function signature and types.\n"
+                            "3. Call get_node_source on the same path to read the function body.\n"
+                            "4. If the context references unknown types or helpers, call search_nodes "
                             "then get_node_source to resolve them.\n"
-                            "4. Write a test body and call execute_testcase.\n"
-                            "5. After each execution, use the coverage feedback to target the next "
+                            "5. Write a test body targeting a specific uncovered condition and call execute_testcase.\n"
+                            "6. After each execution, use the coverage feedback to target the next "
                             "uncovered condition.\n"
-                            "6. Stop when all MC/DC conditions are covered or the iteration budget is exhausted."]
+                            "7. Stop when all MC/DC conditions are covered or the iteration budget is exhausted."]
 
         # Always include the goal
 

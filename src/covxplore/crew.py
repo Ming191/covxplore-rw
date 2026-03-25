@@ -88,6 +88,7 @@ def build_crew(
     from covxplore.prompts import PromptBuilder
     from covxplore.tools import (
         ExecuteTestcaseTool,
+        GetConditionsStaticTool,
         GetFunctionContextTool,
         GetNodeSourceTool,
         SearchNodesTool,
@@ -96,6 +97,7 @@ def build_crew(
     builder = PromptBuilder(prompt_config)
 
     tools = [
+        GetConditionsStaticTool(),
         GetFunctionContextTool(),
         GetNodeSourceTool(),
         SearchNodesTool(),

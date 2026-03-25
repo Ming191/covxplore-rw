@@ -31,14 +31,9 @@ from covxplore.experiment import ExperimentResult
 
 _console = Console()
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def parse_function_paths(paths_file: Path) -> list[str]:
-    """Read a paths file and return non-comment, non-empty lines.
+    """
+    Read a paths file and return non-comment, non-empty lines.
 
     Lines starting with ``#`` and blank lines are ignored.
     Raises ``FileNotFoundError`` if the file does not exist, and
@@ -52,29 +47,23 @@ def parse_function_paths(paths_file: Path) -> list[str]:
 
 
 def _safe_name(function_path: str) -> str:
-    """Derive a filesystem-safe subdirectory name from a function path.
+    """
+    Derive a filesystem-safe subdirectory name from a function path.
 
     Takes the last two ``/``-delimited segments (e.g. ``hjson_decode.cpp``
     and ``Hjson::_readMLString(Parser*)``), sanitizes each, and joins with
     ``__``.  Truncated to 80 characters.
     """
     parts = function_path.rstrip("/").split("/")
-    # Use the last two segments; fall back to just the last if fewer exist
     segments = parts[-2:] if len(parts) >= 2 else parts[-1:]
     sanitized = [re.sub(r"[^A-Za-z0-9_-]+", "_", seg).strip("_") for seg in segments]
-    # Collapse repeated underscores
     name = "__".join(sanitized)
     name = re.sub(r"_+", "_", name).strip("_")
     return name[:80]
 
-
-# ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
-
-
 class ParallelPipeline:
-    """Runs ablation for every function in ``paths_file`` using a thread pool.
+    """
+    Runs ablation for every function in ``paths_file`` using a thread pool.
 
     Each function is processed in its own thread (and therefore its own
     thread-local ``TestSuite``).  Results are written to per-function
@@ -95,10 +84,6 @@ class ParallelPipeline:
         self.variants = variants
         self.repeat = repeat
         self.max_workers = max_workers
-
-    # ------------------------------------------------------------------ #
-    # Public                                                               #
-    # ------------------------------------------------------------------ #
 
     def run(self) -> Path:
         """Execute the parallel pipeline and return the path to the combined CSV."""
@@ -134,10 +119,6 @@ class ParallelPipeline:
         _console.print(f"Combined summary: {summary_path}")
         return summary_path
 
-    # ------------------------------------------------------------------ #
-    # Internal                                                             #
-    # ------------------------------------------------------------------ #
-
     def _run_one(self, function_path: str) -> list[ExperimentResult]:
         """Worker: run the full ablation matrix for one function."""
         func_name = _safe_name(function_path)
@@ -153,12 +134,6 @@ class ParallelPipeline:
         runner.export_results(results, func_out, prefix=func_name)
         return results
 
-
-# ---------------------------------------------------------------------------
-# Combined CSV writer
-# ---------------------------------------------------------------------------
-
-
 def _write_pipeline_summary(
     results: list[ExperimentResult],
     out_dir: Path,
@@ -170,7 +145,6 @@ def _write_pipeline_summary(
         row["function_name"] = _safe_name(r.config.function_path)
         rows.append(row)
 
-    # Sort for deterministic output
     rows.sort(key=lambda r: (r["function_name"], r["prompt_variant"], r["run_id"]))
 
     csv_path = out_dir / "pipeline_summary.csv"
@@ -179,17 +153,14 @@ def _write_pipeline_summary(
         import pandas as pd
 
         df = pd.DataFrame(rows)
-        # Reorder so function_name is the first column
         if not df.empty and "function_name" in df.columns:
             cols = ["function_name"] + [c for c in df.columns if c != "function_name"]
             df = df[cols]
         df.to_csv(csv_path, index=False)
     except ImportError:
-        # Fallback: stdlib csv writer
         if rows:
             fieldnames = ["function_name"] + [k for k in rows[0] if k != "function_name"]
         else:
-            # Write header-only using known flat-row keys
             fieldnames = [
                 "function_name", "run_id", "function_path", "prompt_variant",
                 "stop_reason", "mcdc_coverage_pct", "covered_mcdc_pairs",

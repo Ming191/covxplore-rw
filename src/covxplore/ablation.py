@@ -33,6 +33,7 @@ class AblationRunner:
 
         # Reset the shared suite for this run
         suite: TestSuite = reset_shared_suite(config.function_path)
+        _prefetch_conditions(suite)
 
         stop_reason = "agent_done"
         error_msg = None
@@ -80,7 +81,11 @@ class AblationRunner:
             stop_reason = "max_iter"
             error_msg = None  # Clear the artificial error message
             _console.print(f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]")
-        elif final_suite.mcdc_coverage_pct >= config.mcdc_target or final_suite.iteration_count > 0 and not final_suite.unvisited_summary():
+        elif final_suite.mcdc_coverage_pct >= config.mcdc_target or (
+            final_suite.iteration_count > 0
+            and final_suite.total_mcdc_conditions > 0
+            and not final_suite.unvisited_summary()
+        ):
             stop_reason = "coverage_target"
             error_msg = None
             _console.print("[green]Stopped gracefully: reached coverage target[/]")
@@ -184,6 +189,27 @@ class AblationRunner:
                 "[yellow]pandas not installed — CSV export skipped. "
                 "Install with: pip install pandas[/]"
             )
+
+
+def _prefetch_conditions(suite: "TestSuite") -> None:
+    """Call /api/node/conditions before kickoff to pre-populate total_mcdc_conditions.
+
+    This ensures stop-reason deduction is correct even when all generated tests
+    fail to compile (otherwise total_mcdc_conditions stays 0 and the run is
+    falsely marked as coverage_target).
+    """
+    from covxplore.api_client import AkaUTClient, AkaUTError
+    try:
+        with AkaUTClient() as client:
+            result = client.get_node_conditions(suite.function_path)
+        if result.total_mcdc_pairs > 0:
+            suite.total_mcdc_conditions = result.total_mcdc_pairs
+            _console.print(
+                f"[dim]Static CFG: {result.total_conditions} conditions "
+                f"({result.total_mcdc_pairs} MC/DC pairs)[/]"
+            )
+    except AkaUTError as exc:
+        _console.print(f"[yellow]Could not prefetch conditions: {exc}[/]")
 
 
 def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:
