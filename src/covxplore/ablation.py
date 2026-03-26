@@ -85,6 +85,10 @@ class AblationRunner:
             stop_reason = "max_iter"
             error_msg = None
             _console.print(f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]")
+        elif final_suite.consecutive_redundant >= config.redundant_streak_limit:
+            stop_reason = "redundant_streak"
+            error_msg = None
+            _console.print(f"[yellow]Stopped: {config.redundant_streak_limit} consecutive redundant tests[/]")
         elif final_suite.mcdc_coverage_pct >= config.mcdc_target or (
             final_suite.iteration_count > 0
             and final_suite.total_mcdc_conditions > 0

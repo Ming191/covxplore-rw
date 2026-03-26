@@ -8,7 +8,7 @@ from covxplore.config import get_settings
 from covxplore.models import TestSuite
 from covxplore.status import TestStatus
 
-StopReason = Literal["max_iter", "coverage_target", "agent_done", "error"]
+StopReason = Literal["max_iter", "coverage_target", "redundant_streak", "agent_done", "error"]
 
 
 @dataclass
@@ -19,6 +19,7 @@ class ExperimentConfig:
     prompt_variant: str                      # key in PromptRegistry.VARIANTS
     max_iterations: int = field(default_factory=lambda: get_settings().max_iterations)
     mcdc_target: float = field(default_factory=lambda: get_settings().mcdc_target)
+    redundant_streak_limit: int = 3  # stop after this many consecutive redundant tests
     run_id: str | None = None
 
     def __post_init__(self):

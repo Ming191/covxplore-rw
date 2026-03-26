@@ -127,9 +127,10 @@ class TestSuite:
 
     tests: list[TestResult] = field(default_factory=list)
     covered_keys: set[ConditionKey] = field(default_factory=set)
-    total_mcdc_conditions: int = 0   # total unique ConditionKeys possible (set after first exec)
-    all_conditions: list[str] = field(default_factory=list)  # authoritative condition list from static CFG
+    total_mcdc_conditions: int = 0
+    all_conditions: list[str] = field(default_factory=list)
     iteration_count: int = 0
+    consecutive_redundant: int = 0  # reset to 0 after any non-redundant result
     started_at: float = field(default_factory=time.monotonic)
 
     # ------------------------------------------------------------------ #
@@ -160,6 +161,11 @@ class TestSuite:
                 and len(self.tests) >= min_suite_size
             )
             self.covered_keys |= new_keys
+
+            if result.is_redundant:
+                self.consecutive_redundant += 1
+            else:
+                self.consecutive_redundant = 0
 
             if self.total_mcdc_conditions == 0 and result.condition_trace:
                 unique_conditions = {e.condition for e in result.condition_trace}
@@ -282,6 +288,22 @@ class TestSuite:
             if item["needs_false"]:
                 missing.append("FALSE branch")
             lines.append(f"  • {item['condition']!r} — missing: {', '.join(missing)}")
+
+        # Warn the LLM when it's producing a run of redundant tests
+        if self.consecutive_redundant >= 3:
+            lines.append(
+                "\nWARNING: You have produced 3 consecutive REDUNDANT tests (0 new MC/DC pairs). "
+                "You are stuck. DO NOT call any more tools. "
+                "Output your final 'DONE: <summary>' message immediately to finish the task."
+            )
+        elif self.consecutive_redundant == 2:
+            lines.append(
+                "\nCAUTION: 2 consecutive redundant tests. You are likely stuck on the same path. "
+                "Change your approach completely: try different variable values, operator boundaries, "
+                "or a different code path entirely. If you cannot cover the remaining conditions, "
+                "declare DONE on the next step."
+            )
+
         lines.append(
             "\nTarget the test path that satisfies the highest number of conditions. "
             "Prioritize paths that cover multiple uncovered conditions simultaneously. "
@@ -289,6 +311,7 @@ class TestSuite:
             "Prefer modifying an existing passing test when possible, but allow generating a new test if needed."
         )
         return "\n".join(lines)
+
 
     def to_dict(self) -> dict:
         return {

@@ -34,6 +34,15 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+print("Tracing:", os.getenv("CREWAI_TRACING"))
+print("Project:", os.getenv("CREWAI_PROJECT_NAME"))
+print("Key:", os.getenv("CREWAI_API_KEY")[:8])
+
 
 # ---------------------------------------------------------------------------
 # run_generation  (covxplore-gen)
