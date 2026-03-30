@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from crewai import Agent, Crew, LLM, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, crew, task
 from crewai.tools import BaseTool
 
 from covxplore.config import get_settings
+from covxplore.prompts import PromptBuilder
+from covxplore.tools import SearchNodesTool, GetNodeSourceTool, ExecuteTestcaseTool
 
 
 @CrewBase
@@ -72,7 +76,7 @@ class CovxploreCrew:
         """Assemble the sequential single-agent crew."""
         return Crew(
             agents=self.agents,  # auto-collected by @agent
-            tasks=self.tasks,    # auto-collected by @task
+            tasks=self.tasks,  # auto-collected by @task
             process=Process.sequential,
             verbose=True,
             tracing=True,
@@ -84,38 +88,15 @@ def build_crew(
     *,
     max_iterations: int | None = None,
 ) -> tuple["CovxploreCrew", object]:  # (crew_instance, builder)
-    """Create a ``CovxploreCrew`` + ``PromptBuilder`` for one generation run.
-
-    The caller should then::
-
-        inputs = {
-            "agent_backstory":  builder.system_prompt(),
-            "task_description": builder.task_description(function_path, suite, remaining),
-        }
-        crew_inst.crew().kickoff(inputs=inputs)
-
-    Returns the crew instance and builder so callers can rebuild the task
-    description mid-run if needed.
-    """
-    from covxplore.prompts import PromptBuilder
-    from covxplore.tools import (
-        ExecuteTestcaseTool,
-        GetConditionsStaticTool,
-        GetFunctionContextTool,
-        GetNodeSourceTool,
-        SearchNodesTool,
-    )
-
     builder = PromptBuilder(prompt_config)
 
     tools = [
-        GetConditionsStaticTool(),
-        GetFunctionContextTool(),
+        ExecuteTestcaseTool(),
         GetNodeSourceTool(),
         SearchNodesTool(),
-        ExecuteTestcaseTool(),
     ]
 
     crew_inst: CovxploreCrew | None = None
-    crew_inst = CovxploreCrew(tools, max_iterations=max_iterations)
+    crew_cls = cast(Any, CovxploreCrew)
+    crew_inst = crew_cls(tools=tools, max_iterations=max_iterations)
     return crew_inst, builder

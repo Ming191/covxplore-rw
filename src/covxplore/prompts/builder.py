@@ -60,23 +60,39 @@ class PromptBuilder:
         function_path: str,
         suite=None,  # TestSuite | None
         remaining_iterations: int = 0,
+        static_conditions_text: str | None = None,
+        static_context_text: str | None = None,
+        static_source_text: str | None = None,
     ) -> str:
         """Assemble the task description, injecting live coverage state."""
         from covxplore.models import TestSuite  # local import to avoid circular
 
-        parts: list[str] = [f"Generate MC/DC-covering test cases for the function at:\n"
-                            f"  {function_path}\n\n"
-                            "Workflow:\n"
-                            "1. Call get_conditions_static to get the full list of MC/DC conditions "
-                            "that must be covered — do this FIRST so you know the coverage target.\n"
-                            "2. Call get_function_context to understand the function signature and types.\n"
-                            "3. Call get_node_source on the same path to read the function body.\n"
-                            "4. If you see unknown types or helpers, call search_nodes "
-                            "then get_node_source to resolve them.\n"
-                            "5. Write a test body targeting a specific uncovered condition and call execute_testcase.\n"
-                            "6. After each execution, use the coverage feedback to target the next "
-                            "uncovered condition.\n"
-                            "7. Stop when all MC/DC conditions are covered or the iteration budget is exhausted."]
+        parts: list[str] = [
+            f"Generate MC/DC-covering test cases for the function at:\n"
+            f"  {function_path}\n\n"
+            "Workflow:\n"
+            "Use the preloaded static data below as ground truth (conditions, context, source).\n"
+            "If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol.\n"
+            "Do NOT call static condition/context fetch tools again; they are already provided below.\n"
+            "Generate one focused test body and call execute_testcase.\n"
+            "After each execution, use coverage feedback to target the next uncovered conditions.\n"
+            "Stop when all MC/DC conditions are covered or the iteration budget is exhausted."
+        ]
+
+        if static_conditions_text:
+            parts.append(
+                "PRELOADED STATIC CONDITIONS (one-time snapshot):\n\n"
+                f"{static_conditions_text}"
+            )
+        if static_context_text:
+            parts.append(
+                "PRELOADED FUNCTION CONTEXT (one-time snapshot):\n\n"
+                f"{static_context_text}"
+            )
+        if static_source_text:
+            parts.append(
+                f"PRELOADED FOCAL SOURCE (one-time snapshot):\n\n{static_source_text}"
+            )
 
         # Always include the goal
 

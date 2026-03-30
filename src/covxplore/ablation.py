@@ -14,6 +14,7 @@ from covxplore.llm_logger import LLMInteractionLogger
 from covxplore.models import TestSuite
 from covxplore.status import TestStatus
 from covxplore.prompts.registry import VARIANTS, get_variant
+from covxplore.prompts.builder import PromptBuilder
 from covxplore.tools.execute_testcase import (
     get_shared_suite,
     reset_shared_suite,
@@ -32,6 +33,7 @@ class AblationRunner:
         Execute a single experiment run end-to-end.
         """
         cfg = get_settings()
+        assert config.run_id is not None
         prompt_config = get_variant(config.prompt_variant)
 
         _console.rule(
@@ -51,16 +53,23 @@ class AblationRunner:
         llm_logger = LLMInteractionLogger()
 
         try:
+            static_conditions_text, static_context_text, static_source_text = (
+                _prefetch_static_prompt_data(config.function_path)
+            )
             crew_inst, builder = build_crew(
                 prompt_config=prompt_config,
                 max_iterations=config.max_iterations,
             )
+            assert isinstance(builder, PromptBuilder)
             inputs = {
                 "agent_backstory": builder.system_prompt(),
                 "task_description": builder.task_description(
                     function_path=config.function_path,
                     suite=suite,
                     remaining_iterations=config.max_iterations,
+                    static_conditions_text=static_conditions_text,
+                    static_context_text=static_context_text,
+                    static_source_text=static_source_text,
                 ),
             }
             # Attach after build_crew() so CrewAI's tracing setup
@@ -247,6 +256,43 @@ def _prefetch_conditions(suite: "TestSuite") -> None:
             )
     except AkaUTError as exc:
         _console.print(f"[yellow]Could not prefetch conditions: {exc}[/]")
+
+
+def _format_conditions_for_prompt(result) -> str:
+    lines = [
+        f"Found {result.total_conditions} conditions "
+        f"({result.total_mcdc_pairs} MC/DC pairs to cover):",
+        "",
+    ]
+    for i, c in enumerate(result.conditions, start=1):
+        if c.node_id is None:
+            raise RuntimeError(
+                "Backend payload missing nodeId in /api/node/conditions. "
+                "nodeId is required for MC/DC identity."
+            )
+        line = c.line_in_function if c.line_in_function is not None else "?"
+        start = c.start_offset if c.start_offset is not None else "?"
+        end = c.end_offset if c.end_offset is not None else "?"
+        lines.append(
+            f"  {i}. [node:{c.node_id} line+{line}, offset {start}–{end}] {c.condition!r}"
+        )
+    return "\n".join(lines)
+
+
+def _prefetch_static_prompt_data(function_path: str) -> tuple[str, str, str]:
+    """Fetch static data once and return prompt-ready text blocks."""
+    from covxplore.api_client import AkaUTClient
+    from covxplore.tools.get_source import _number_lines
+
+    with AkaUTClient() as client:
+        cond = client.get_node_conditions(function_path)
+        ctx = client.get_function_context(function_path)
+        src = client.get_node_source(function_path)
+
+    cond_text = _format_conditions_for_prompt(cond)
+    ctx_text = ctx.context
+    src_text = f"// Source: {function_path}\n{_number_lines(src.source)}"
+    return cond_text, ctx_text, src_text
 
 
 def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:

@@ -8,5 +8,3 @@ test_generator:
     {agent_backstory}
   verbose: true
   allow_delegation: false
-  reasoning: true
-  max_reasoning_attempts: 3
