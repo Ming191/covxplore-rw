@@ -4,6 +4,7 @@ Synchronous HTTP client for the AkaUT Spring Boot REST API.
 All methods raise ``AkaUTError`` on non-2xx responses, so callers can
 catch a single exception type without inspecting status codes.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from covxplore.status import normalize_test_status
 
 class AkaUTError(Exception):
     """Raised when the AkaUT API returns an error or is unreachable."""
+
     def __init__(self, message: str, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
@@ -25,6 +27,7 @@ class AkaUTError(Exception):
 # ---------------------------------------------------------------------------
 # Typed return types (lightweight; Pydantic models live in models.py)
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class NodeInfo:
@@ -48,6 +51,7 @@ class SourceResult:
 
 @dataclass
 class ConditionInfo:
+    node_id: int | None
     condition: str
     line_in_function: int | None
     start_offset: int | None
@@ -69,6 +73,7 @@ class ConditionsResult:
 @dataclass
 class ExecuteResult:
     """Raw deserialized JSON from POST /api/testcase/execute."""
+
     raw: dict[str, Any]
 
     @property
@@ -111,6 +116,7 @@ class ExecuteResult:
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
+
 
 class AkaUTClient:
     """Thin synchronous wrapper around the AkaUT REST API.
@@ -158,7 +164,9 @@ class AkaUTClient:
             raise AkaUTError(f"POST {url} failed: {exc}") from exc
         if not r.is_success:
             body_text = r.text[:300]
-            raise AkaUTError(f"POST {url} → HTTP {r.status_code}: {body_text}", r.status_code)
+            raise AkaUTError(
+                f"POST {url} → HTTP {r.status_code}: {body_text}", r.status_code
+            )
         return r.json()
 
     # ------------------------------------------------------------------ #
@@ -218,6 +226,7 @@ class AkaUTClient:
             total_conditions=data["totalConditions"],
             conditions=[
                 ConditionInfo(
+                    node_id=c.get("nodeId"),
                     condition=c["condition"],
                     line_in_function=c.get("lineInFunction"),
                     start_offset=c.get("startOffset"),

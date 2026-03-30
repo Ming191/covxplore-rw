@@ -55,6 +55,7 @@ class ExperimentResult:
     crew_prompt_tokens: int | None = None
     crew_completion_tokens: int | None = None
     tracing_url: str | None = None  # CrewAI trace URL if tracing was enabled
+    llm_interactions: list[dict] = field(default_factory=list)  # per-call thinking+answer log
 
     # ------------------------------------------------------------------ #
     # Derived metrics (computed from suite)                               #
@@ -112,6 +113,7 @@ class ExperimentResult:
                 "iterations_used": self.iterations_used,
             },
             "tracing_url": self.tracing_url,
+            "llm_interactions": self.llm_interactions,
             "test_suite": [
                 {
                     "test_name": t.test_name,

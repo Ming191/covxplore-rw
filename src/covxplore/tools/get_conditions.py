@@ -1,4 +1,5 @@
 """GetConditionsStaticTool — wraps GET /api/node/conditions."""
+
 from __future__ import annotations
 
 from crewai.tools import BaseTool
@@ -50,11 +51,20 @@ class GetConditionsStaticTool(BaseTool):
         except AkaUTError as exc:
             return f"[ERROR] get_conditions_static failed: {exc}"
 
-        # Pre-populate the shared suite so total_mcdc_conditions is known even
-        # if the first tests fail to compile.
         suite = get_shared_suite()
-        if suite is not None and suite.total_mcdc_conditions == 0:
-            suite.total_mcdc_conditions = result.total_mcdc_pairs
+        if suite is not None:
+            if suite.total_mcdc_conditions == 0:
+                suite.total_mcdc_conditions = result.total_mcdc_pairs
+            suite.all_conditions = [c.condition for c in result.conditions]
+            for c in result.conditions:
+                cid = getattr(c, "node_id", None)
+                if cid is None:
+                    raise RuntimeError(
+                        "Backend payload missing nodeId in /api/node/conditions. "
+                        "nodeId is required for MC/DC identity."
+                    )
+                suite.condition_id_to_text[cid] = c.condition
+                suite.condition_id_to_line[cid] = c.line_in_function
 
         if not result.conditions:
             return (

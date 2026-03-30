@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 import time
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -17,16 +16,33 @@ from covxplore.models import (
 )
 from covxplore.status import TestStatus, is_failure_status
 
-_tls = threading.local()
+_suites: dict[str, TestSuite] = {}
+_current_run_id: str | None = None
 
 
 def get_shared_suite() -> TestSuite | None:
-    return getattr(_tls, "suite", None)
+    if _current_run_id is None:
+        return None
+    return _suites.get(_current_run_id)
 
 
-def reset_shared_suite(function_path: str) -> TestSuite:
-    _tls.suite = TestSuite(function_path=function_path)
-    return _tls.suite
+def set_current_run(run_id: str) -> None:
+    global _current_run_id
+    _current_run_id = run_id
+
+
+def reset_shared_suite(function_path: str, run_id: str) -> TestSuite:
+    global _current_run_id
+    _current_run_id = run_id
+    suite = TestSuite(function_path=function_path)
+    _suites[run_id] = suite
+    return suite
+
+
+def cleanup_suite(run_id: str) -> None:
+    """Remove suite after run completes to free memory."""
+    _suites.pop(run_id, None)
+
 
 class _Input(BaseModel):
     absolute_path: str = Field(
@@ -54,6 +70,7 @@ class _Input(BaseModel):
 # ---------------------------------------------------------------------------
 # Tool
 # ---------------------------------------------------------------------------
+
 
 class ExecuteTestcaseTool(BaseTool):
     """Compile and execute a C++ test body against the target function.
@@ -136,6 +153,7 @@ class ExecuteTestcaseTool(BaseTool):
             ),
             unvisited_mcdc=[
                 UnvisitedMcdc(
+                    node_id=u.get("nodeId"),
                     condition=u.get("condition", ""),
                     true_branch_visited=u.get("trueBranchVisited", False),
                     false_branch_visited=u.get("falseBranchVisited", False),
@@ -144,6 +162,7 @@ class ExecuteTestcaseTool(BaseTool):
             ],
             condition_trace=[
                 ConditionTraceEntry(
+                    node_id=e.get("nodeId"),
                     condition=e.get("condition", ""),
                     true_branch_visited=e.get("trueBranchVisited", False),
                     false_branch_visited=e.get("falseBranchVisited", False),
@@ -153,7 +172,9 @@ class ExecuteTestcaseTool(BaseTool):
                 )
                 for e in raw.condition_trace
             ],
-            trace_summary=TraceSummary(**raw.trace_summary) if raw.trace_summary else None,
+            trace_summary=TraceSummary(**raw.trace_summary)
+            if raw.trace_summary
+            else None,
         )
 
         # ---------------------------------------------------------------- #
@@ -174,31 +195,78 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
 
     # Header
     redundant_tag = " [REDUNDANT — 0 new MC/DC pairs]" if result.is_redundant else ""
-    lines.append(
-        f"=== {result.test_name} | {result.status}{redundant_tag} ==="
-    )
+    lines.append(f"=== {result.test_name} | {result.status}{redundant_tag} ===")
 
     # Coverage this test
     m = result.mcdc_coverage
     lines.append(
         f"This test  → MC/DC: {m.visited}/{m.total} "
-        f"({m.progress*100:.0f}%) | +{result.new_mcdc_pairs_covered} new pairs"
+        f"({m.progress * 100:.0f}%) | +{result.new_mcdc_pairs_covered} new pairs"
     )
 
     # Suite aggregate
     if suite:
         lines.append(
             f"Suite total → MC/DC: {len(suite.covered_keys)}/{suite.total_mcdc_conditions} "
-            f"({suite.mcdc_coverage_pct*100:.0f}%) | "
+            f"({suite.mcdc_coverage_pct * 100:.0f}%) | "
             f"iter={suite.iteration_count} | "
-            f"redundancy={suite.redundancy_rate*100:.0f}%"
+            f"redundancy={suite.redundancy_rate * 100:.0f}%"
         )
         gap = suite.coverage_gap_prompt_fragment()
         lines.append("")
         lines.append(gap)
 
+    # Condition evaluation trace — show which branches each condition actually hit.
+    # This lets the model catch state-setup mistakes (e.g. wrong indexNext) by seeing
+    # that a condition it targeted still evaluated to the wrong branch.
+    trace_block = _format_condition_trace(result)
+    if trace_block:
+        lines.append("")
+        lines.append(trace_block)
+
     # Send full failure logs so the LLM can diagnose root causes precisely.
     if is_failure_status(result.status) and result.execute_log:
         lines.append(f"\nExecution log:\n{result.execute_log.strip()}")
+
+    return "\n".join(lines)
+
+
+def _format_condition_trace(result: TestResult) -> str | None:
+    """Return a compact per-condition evaluation table for this test.
+
+    Only emitted for passing tests with trace data. Focuses on conditions
+    that still have at least one uncovered branch so the model can see
+    exactly which branch its test exercised (or failed to exercise).
+    """
+    if not result.condition_trace:
+        return None
+    if is_failure_status(result.status):
+        return None
+
+    # Build a lookup: condition text → (true_visited, false_visited)
+    trace_map: dict[str, tuple[bool, bool]] = {}
+    for entry in result.condition_trace:
+        prev = trace_map.get(entry.condition, (False, False))
+        trace_map[entry.condition] = (
+            prev[0] or entry.true_branch_visited,
+            prev[1] or entry.false_branch_visited,
+        )
+
+    # Only show conditions that were actually evaluated in this test (at least one branch hit)
+    # AND still have uncovered branches. Skip all-NO entries — those weren't reached.
+    unvisited_conds = {u.condition for u in result.unvisited_mcdc}
+    reached = [
+        (cond, tv, fv)
+        for cond, (tv, fv) in trace_map.items()
+        if cond in unvisited_conds and (tv or fv)
+    ]
+    if not reached:
+        return None
+
+    lines = ["Condition evaluation this test (still-uncovered conditions only):"]
+    for cond, tv, fv in reached[:8]:  # cap to stay within token budget
+        t_mark = "YES" if tv else "NO "
+        f_mark = "YES" if fv else "NO "
+        lines.append(f"  {cond!r:50s}  TRUE={t_mark}  FALSE={f_mark}")
 
     return "\n".join(lines)

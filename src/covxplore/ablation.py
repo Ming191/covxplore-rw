@@ -10,10 +10,16 @@ from rich.table import Table
 from covxplore.config import get_settings
 from covxplore.crew import build_crew
 from covxplore.experiment import ExperimentConfig, ExperimentResult
+from covxplore.llm_logger import LLMInteractionLogger
 from covxplore.models import TestSuite
 from covxplore.status import TestStatus
 from covxplore.prompts.registry import VARIANTS, get_variant
-from covxplore.tools.execute_testcase import get_shared_suite, reset_shared_suite
+from covxplore.tools.execute_testcase import (
+    get_shared_suite,
+    reset_shared_suite,
+    cleanup_suite,
+)
+
 
 _console = Console()
 
@@ -33,7 +39,7 @@ class AblationRunner:
         )
 
         # Reset the shared suite for this run
-        suite: TestSuite = reset_shared_suite(config.function_path)
+        suite: TestSuite = reset_shared_suite(config.function_path, config.run_id)
         _prefetch_conditions(suite)
 
         stop_reason = "agent_done"
@@ -42,6 +48,7 @@ class AblationRunner:
         crew_completion_tokens = None
         tracing_url = None
         crew_inst = None
+        llm_logger = LLMInteractionLogger()
 
         try:
             crew_inst, builder = build_crew(
@@ -56,6 +63,9 @@ class AblationRunner:
                     remaining_iterations=config.max_iterations,
                 ),
             }
+            # Attach after build_crew() so CrewAI's tracing setup
+            # (which resets litellm.callbacks) doesn't wipe our shim.
+            llm_logger.attach()
             crew_inst.crew().kickoff(inputs=inputs)
 
         except Exception as e:
@@ -65,6 +75,7 @@ class AblationRunner:
             traceback.print_exc()
 
         finally:
+            llm_logger.detach()
             if crew_inst is not None:
                 try:
                     metrics = crew_inst.crew().usage_metrics
@@ -84,11 +95,15 @@ class AblationRunner:
         if final_suite.iteration_count >= config.max_iterations:
             stop_reason = "max_iter"
             error_msg = None
-            _console.print(f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]")
+            _console.print(
+                f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]"
+            )
         elif final_suite.consecutive_redundant >= config.redundant_streak_limit:
             stop_reason = "redundant_streak"
             error_msg = None
-            _console.print(f"[yellow]Stopped: {config.redundant_streak_limit} consecutive redundant tests[/]")
+            _console.print(
+                f"[yellow]Stopped: {config.redundant_streak_limit} consecutive redundant tests[/]"
+            )
         elif final_suite.mcdc_coverage_pct >= config.mcdc_target or (
             final_suite.iteration_count > 0
             and final_suite.total_mcdc_conditions > 0
@@ -106,9 +121,11 @@ class AblationRunner:
             crew_prompt_tokens=crew_prompt_tokens,
             crew_completion_tokens=crew_completion_tokens,
             tracing_url=tracing_url,
+            llm_interactions=llm_logger.interactions,
         )
 
         _print_result_summary(result)
+        cleanup_suite(config.run_id)
         return result
 
     def run_matrix(
@@ -208,12 +225,22 @@ def _prefetch_conditions(suite: "TestSuite") -> None:
     falsely marked as coverage_target).
     """
     from covxplore.api_client import AkaUTClient, AkaUTError
+
     try:
         with AkaUTClient() as client:
             result = client.get_node_conditions(suite.function_path)
         if result.total_mcdc_pairs > 0:
             suite.total_mcdc_conditions = result.total_mcdc_pairs
             suite.all_conditions = [c.condition for c in result.conditions]
+            for c in result.conditions:
+                if c.node_id is None:
+                    raise RuntimeError(
+                        "Backend payload missing nodeId in /api/node/conditions. "
+                        "nodeId is required for MC/DC identity."
+                    )
+                cid = c.node_id
+                suite.condition_id_to_text[cid] = c.condition
+                suite.condition_id_to_line[cid] = c.line_in_function
             _console.print(
                 f"[dim]Static CFG: {result.total_conditions} conditions "
                 f"({result.total_mcdc_pairs} MC/DC pairs)[/]"
@@ -225,7 +252,7 @@ def _prefetch_conditions(suite: "TestSuite") -> None:
 def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:
     """Fallback token attribution after kickoff() completes.
 
-    Distributes the overall metrics.prompt_tokens and metrics.completion_tokens 
+    Distributes the overall metrics.prompt_tokens and metrics.completion_tokens
     evenly across all PASSED/RUNTIME_ERROR tests in the suite.
     """
     if crew_inst is None:
@@ -241,7 +268,8 @@ def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:
     if total_prompt == 0 and total_completion == 0:
         return
     eligible = [
-        t for t in suite.tests
+        t
+        for t in suite.tests
         if t.status in {TestStatus.PASSED.value, TestStatus.RUNTIME_ERROR.value}
     ]
     if not eligible:
@@ -257,9 +285,9 @@ def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:
 def _print_result_summary(r: ExperimentResult) -> None:
     m = r.to_summary_dict()["metrics"]
     _console.print(
-        f"  MC/DC: [bold]{m['mcdc_coverage_pct']*100:.0f}%[/] "
+        f"  MC/DC: [bold]{m['mcdc_coverage_pct'] * 100:.0f}%[/] "
         f"({m['covered_mcdc_pairs']}/{m['total_mcdc_pairs']})  |  "
-        f"redundancy: {m['redundancy_rate']*100:.0f}%  |  "
+        f"redundancy: {m['redundancy_rate'] * 100:.0f}%  |  "
         f"tokens: {m['total_tokens']:,}  |  "
         f"time: {m['elapsed_sec']:.1f}s  |  "
         f"stop: {r.stop_reason}"
@@ -280,8 +308,8 @@ def _print_matrix_summary(results: list[ExperimentResult]) -> None:
         m = r.to_summary_dict()["metrics"]
         table.add_row(
             r.config.prompt_variant,
-            f"{m['mcdc_coverage_pct']*100:.0f}%",
-            f"{m['redundancy_rate']*100:.0f}%",
+            f"{m['mcdc_coverage_pct'] * 100:.0f}%",
+            f"{m['redundancy_rate'] * 100:.0f}%",
             f"{m['total_tokens']:,}",
             f"{m['elapsed_sec']:.1f}",
             r.stop_reason,

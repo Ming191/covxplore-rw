@@ -12,6 +12,7 @@ Design notes
   covered set, so delta calculations are always consistent.
 * Redundancy is decided at add-time: a test is redundant iff it covers 0 new keys.
 """
+
 from __future__ import annotations
 
 import time
@@ -27,6 +28,7 @@ from covxplore.status import TestStatus, normalize_test_status
 # Primitives mirroring the AkaUT REST response shape
 # ---------------------------------------------------------------------------
 
+
 class CoverageDetail(BaseModel):
     visited: int = 0
     total: int = 0
@@ -38,18 +40,36 @@ class CoverageDetail(BaseModel):
 
 
 class UnvisitedMcdc(BaseModel):
+    node_id: int | None = None
     condition: str
     true_branch_visited: bool
     false_branch_visited: bool
 
+    def identity(self) -> int:
+        if self.node_id is None:
+            raise RuntimeError(
+                "Backend payload missing nodeId in unvisitedMcdcConditions. "
+                "nodeId is required for MC/DC identity."
+            )
+        return self.node_id
+
 
 class ConditionTraceEntry(BaseModel):
+    node_id: int | None = None
     condition: str
     true_branch_visited: bool
     false_branch_visited: bool
     line_in_function: int | None = None
     start_offset_in_function: int | None = None
     end_offset_in_function: int | None = None
+
+    def identity(self) -> int:
+        if self.node_id is None:
+            raise RuntimeError(
+                "Backend payload missing nodeId in conditionTrace. "
+                "nodeId is required for MC/DC identity."
+            )
+        return self.node_id
 
 
 class TraceSummary(BaseModel):
@@ -65,20 +85,23 @@ class TraceSummary(BaseModel):
 # (condition text, polarity that was exercised)
 # ---------------------------------------------------------------------------
 
+
 class ConditionKey(NamedTuple):
-    """Identifies one (condition, polarity) pair within the target function."""
-    condition: str
-    polarity: bool   # True → true-branch exercised; False → false-branch
+    """Identifies one (condition-identity, polarity) pair within target function."""
+
+    condition_id: int
+    polarity: bool  # True → true-branch exercised; False → false-branch
 
 
 # ---------------------------------------------------------------------------
 # TestResult — one executed test case
 # ---------------------------------------------------------------------------
 
+
 class TestResult(BaseModel):
     test_name: str
     test_body: str
-    status: str                                  # PASSED | FAILED | RUNTIME_ERROR | COMPILE_ERROR | UNKNOWN
+    status: str  # PASSED | FAILED | RUNTIME_ERROR | COMPILE_ERROR | UNKNOWN
     execute_log: str | None = None
 
     statement_coverage: CoverageDetail = Field(default_factory=CoverageDetail)
@@ -100,19 +123,30 @@ class TestResult(BaseModel):
     iteration: int = 0
 
     def condition_keys(self) -> set[ConditionKey]:
-        """Return (condition, polarity) keys visited by this test via unvisited_mcdc."""
+        """Return (condition, polarity) keys visited by this test."""
         keys: set[ConditionKey] = set()
-        for entry in self.unvisited_mcdc:
+        if self.unvisited_mcdc:
+            for entry in self.unvisited_mcdc:
+                cond_id = entry.identity()
+                if entry.true_branch_visited:
+                    keys.add(ConditionKey(cond_id, True))
+                if entry.false_branch_visited:
+                    keys.add(ConditionKey(cond_id, False))
+            return keys
+
+        for entry in self.condition_trace:
+            cond_id = entry.identity()
             if entry.true_branch_visited:
-                keys.add(ConditionKey(entry.condition, True))
+                keys.add(ConditionKey(cond_id, True))
             if entry.false_branch_visited:
-                keys.add(ConditionKey(entry.condition, False))
+                keys.add(ConditionKey(cond_id, False))
         return keys
 
 
 # ---------------------------------------------------------------------------
 # TestSuite — aggregate state across all generated tests
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class TestSuite:
@@ -129,6 +163,8 @@ class TestSuite:
     covered_keys: set[ConditionKey] = field(default_factory=set)
     total_mcdc_conditions: int = 0
     all_conditions: list[str] = field(default_factory=list)
+    condition_id_to_text: dict[int, str] = field(default_factory=dict)
+    condition_id_to_line: dict[int, int | None] = field(default_factory=dict)
     iteration_count: int = 0
     consecutive_redundant: int = 0  # reset to 0 after any non-redundant result
     started_at: float = field(default_factory=time.monotonic)
@@ -139,6 +175,7 @@ class TestSuite:
 
     def add_result(self, result: TestResult, min_suite_size: int = 3) -> None:
         """Register a new TestResult and update suite-level coverage tracking."""
+
         self.iteration_count += 1
         result.iteration = self.iteration_count
 
@@ -146,19 +183,10 @@ class TestSuite:
         if normalized in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}:
             raw_keys = result.condition_keys()
 
-            if self.all_conditions and result.unvisited_mcdc is not None:
-                unvisited_cond_set = {u.condition for u in result.unvisited_mcdc}
-                for cond in self.all_conditions:
-                    if cond not in unvisited_cond_set:
-                        # Not in unvisited list → both branches covered in this test
-                        raw_keys.add(ConditionKey(cond, True))
-                        raw_keys.add(ConditionKey(cond, False))
-
             new_keys = raw_keys - self.covered_keys
             result.new_mcdc_pairs_covered = len(new_keys)
             result.is_redundant = (
-                len(new_keys) == 0
-                and len(self.tests) >= min_suite_size
+                len(new_keys) == 0 and len(self.tests) >= min_suite_size
             )
             self.covered_keys |= new_keys
 
@@ -167,9 +195,27 @@ class TestSuite:
             else:
                 self.consecutive_redundant = 0
 
-            if self.total_mcdc_conditions == 0 and result.condition_trace:
-                unique_conditions = {e.condition for e in result.condition_trace}
-                self.total_mcdc_conditions = len(unique_conditions) * 2
+            # Discover condition identities from execution response.
+            discovered_ids: dict[int, str] = {}
+            if result.condition_trace:
+                for e in result.condition_trace:
+                    discovered_ids[e.identity()] = e.condition.strip()
+                    self.condition_id_to_line[e.identity()] = e.line_in_function
+            if result.unvisited_mcdc:
+                for u in result.unvisited_mcdc:
+                    discovered_ids[u.identity()] = u.condition.strip()
+
+            for cid, ctext in discovered_ids.items():
+                if cid not in self.condition_id_to_text:
+                    self.condition_id_to_text[cid] = ctext
+
+            self.all_conditions = [
+                self.condition_id_to_text[cid] for cid in self.condition_id_to_text
+            ]
+
+            # Update total_mcdc_conditions from execution response if not already set
+            if self.total_mcdc_conditions == 0 and result.mcdc_coverage.total > 0:
+                self.total_mcdc_conditions = result.mcdc_coverage.total
 
         self.tests.append(result)
 
@@ -215,15 +261,21 @@ class TestSuite:
         Requires all_conditions to be pre-populated by _prefetch_conditions().
         """
         result = []
-        for cond in self.all_conditions:
-            needs_true = ConditionKey(cond, True) not in self.covered_keys
-            needs_false = ConditionKey(cond, False) not in self.covered_keys
+        for cond_id, cond in self.condition_id_to_text.items():
+            key_true = ConditionKey(cond_id, True)
+            key_false = ConditionKey(cond_id, False)
+            needs_true = key_true not in self.covered_keys
+            needs_false = key_false not in self.covered_keys
             if needs_true or needs_false:
-                result.append({
-                    "condition": cond,
-                    "needs_true": needs_true,
-                    "needs_false": needs_false,
-                })
+                result.append(
+                    {
+                        "condition_id": cond_id,
+                        "condition": cond,
+                        "line_in_function": self.condition_id_to_line.get(cond_id),
+                        "needs_true": needs_true,
+                        "needs_false": needs_false,
+                    }
+                )
         return result
 
     def coverage_gap_prompt_fragment(self) -> str:
@@ -268,26 +320,30 @@ class TestSuite:
 
         unvisited = self.unvisited_summary()
         if not unvisited:
-            if self.total_mcdc_conditions > 0:
-                remaining = max(self.total_mcdc_conditions - len(self.covered_keys), 0)
-                return (
-                    f"Coverage details for the last execution are incomplete. "
-                    f"Still need at least {remaining} MC/DC pairs. "
-                    "Do NOT stop. Run another compilable test and continue coverage."
-                )
-            return (
-                "Coverage details are incomplete and total MC/DC target is unknown. "
-                "Do NOT stop. Continue with compilable executions until coverage data is available."
+            remaining = max(self.total_mcdc_conditions - len(self.covered_keys), 0)
+            raise RuntimeError(
+                "Unable to compute uncovered conditions while MC/DC pairs remain. "
+                f"remaining={remaining}, all_conditions={len(self.all_conditions)}, "
+                f"unique_condition_ids={len(self.condition_id_to_text)}, "
+                f"covered_keys={len(self.covered_keys)}, total_mcdc={self.total_mcdc_conditions}. "
+                "This indicates inconsistent condition identity between static and execution data."
             )
 
         lines = ["The following MC/DC condition polarities are NOT yet covered:"]
-        for item in unvisited[:8]:   # cap at 8 to stay within token budget
+        for item in unvisited:
             missing = []
             if item["needs_true"]:
                 missing.append("TRUE branch")
             if item["needs_false"]:
                 missing.append("FALSE branch")
-            lines.append(f"  • {item['condition']!r} — missing: {', '.join(missing)}")
+            line_tag = (
+                f"line+{item['line_in_function']}"
+                if item["line_in_function"] is not None
+                else "line+?"
+            )
+            lines.append(
+                f"  • [{line_tag}] {item['condition']!r} — missing: {', '.join(missing)}"
+            )
 
         # Warn the LLM when it's producing a run of redundant tests
         if self.consecutive_redundant >= 3:
@@ -311,7 +367,6 @@ class TestSuite:
             "Prefer modifying an existing passing test when possible, but allow generating a new test if needed."
         )
         return "\n".join(lines)
-
 
     def to_dict(self) -> dict:
         return {

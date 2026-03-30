@@ -71,7 +71,7 @@ class PromptBuilder:
                             "that must be covered — do this FIRST so you know the coverage target.\n"
                             "2. Call get_function_context to understand the function signature and types.\n"
                             "3. Call get_node_source on the same path to read the function body.\n"
-                            "4. If the context references unknown types or helpers, call search_nodes "
+                            "4. If you see unknown types or helpers, call search_nodes "
                             "then get_node_source to resolve them.\n"
                             "5. Write a test body targeting a specific uncovered condition and call execute_testcase.\n"
                             "6. After each execution, use the coverage feedback to target the next "
