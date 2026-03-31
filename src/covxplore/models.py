@@ -90,21 +90,20 @@ class TestResult(BaseModel):
     def condition_keys(self) -> set[ConditionKey]:
         """Return (condition, polarity) keys visited by this test."""
         keys: set[ConditionKey] = set()
-        if self.unvisited_mcdc:
-            for entry in self.unvisited_mcdc:
-                cond_id = entry.identity()
-                if entry.true_branch_visited:
-                    keys.add(ConditionKey(cond_id, True))
-                if entry.false_branch_visited:
-                    keys.add(ConditionKey(cond_id, False))
-            return keys
-
         for entry in self.condition_trace:
             cond_id = entry.identity()
             if entry.true_branch_visited:
                 keys.add(ConditionKey(cond_id, True))
             if entry.false_branch_visited:
                 keys.add(ConditionKey(cond_id, False))
+
+        for entry in self.unvisited_mcdc:
+            cond_id = entry.identity()
+            if entry.true_branch_visited:
+                keys.add(ConditionKey(cond_id, True))
+            if entry.false_branch_visited:
+                keys.add(ConditionKey(cond_id, False))
+
         return keys
 
 
@@ -210,7 +209,36 @@ class TestSuite:
                         "needs_false": needs_false,
                     }
                 )
+        result.sort(
+            key=lambda item: (
+                item["line_in_function"] is None,
+                item["line_in_function"]
+                if item["line_in_function"] is not None
+                else float("inf"),
+                item["condition_id"],
+            )
+        )
         return result
+
+    def _observed_polarity_counts(self) -> dict[ConditionKey, int]:
+        """Count observed condition polarities across executed tests.
+
+        Uses per-test condition_trace when available. This is used only for
+        target-priority heuristics in prompt guidance.
+        """
+        counts: dict[ConditionKey, int] = {}
+        for test in self.tests:
+            if not test.condition_trace:
+                continue
+            for entry in test.condition_trace:
+                cond_id = entry.identity()
+                if entry.true_branch_visited:
+                    key = ConditionKey(cond_id, True)
+                    counts[key] = counts.get(key, 0) + 1
+                if entry.false_branch_visited:
+                    key = ConditionKey(cond_id, False)
+                    counts[key] = counts.get(key, 0) + 1
+        return counts
 
     def coverage_gap_prompt_fragment(self) -> str:
         if not self.tests:
@@ -258,7 +286,81 @@ class TestSuite:
                 "This indicates inconsistent condition identity between static and execution data."
             )
 
-        lines = ["The following MC/DC condition polarities are NOT yet covered:"]
+        observed = self._observed_polarity_counts()
+
+        obligations: list[tuple[dict, bool]] = []
+        for item in unvisited:
+            if item["needs_true"]:
+                obligations.append((item, True))
+            if item["needs_false"]:
+                obligations.append((item, False))
+
+        def _is_suspected_stuck(item: dict, polarity: bool) -> bool:
+            if self.iteration_count < 6:
+                return False
+            target_seen = observed.get(ConditionKey(item["condition_id"], polarity), 0)
+            opposite_seen = observed.get(
+                ConditionKey(item["condition_id"], not polarity), 0
+            )
+            return target_seen == 0 and opposite_seen >= 3
+
+        obligations.sort(
+            key=lambda pair: (
+                _is_suspected_stuck(pair[0], pair[1]),
+                pair[0]["line_in_function"] is None,
+                pair[0]["line_in_function"]
+                if pair[0]["line_in_function"] is not None
+                else float("inf"),
+                pair[0]["condition_id"],
+                0 if pair[1] else 1,
+            )
+        )
+
+        suspected = [
+            (item, pol) for item, pol in obligations if _is_suspected_stuck(item, pol)
+        ]
+        non_stuck = [
+            (item, pol)
+            for item, pol in obligations
+            if not _is_suspected_stuck(item, pol)
+        ]
+
+        if not non_stuck and suspected:
+            lines = [
+                "Condition identity note: MC/DC condition identity is nodeId; condition text may repeat across different nodeIds.",
+                "",
+                "All remaining obligations are likely stuck/unobservable from backend feedback.",
+                "Do NOT continue issuing near-duplicate tests.",
+                "Output final DONE summary now and report likely instrumentation gap for the remaining nodeId/polarities:",
+            ]
+            for item, pol in suspected[:8]:
+                line_tag = (
+                    f"line+{item['line_in_function']}"
+                    if item["line_in_function"] is not None
+                    else "line+?"
+                )
+                need = "TRUE" if pol else "FALSE"
+                lines.append(
+                    f"  • [node:{item['condition_id']} {line_tag}] need {need} for {item['condition']!r}"
+                )
+            lines.append(
+                "Rationale: opposite polarity was observed repeatedly, but this polarity never appears."
+            )
+            return "\n".join(lines)
+
+        target, target_polarity = non_stuck[0] if non_stuck else obligations[0]
+        required_flip = "TRUE" if target_polarity else "FALSE"
+        target_line = (
+            f"line+{target['line_in_function']}"
+            if target["line_in_function"] is not None
+            else "line+?"
+        )
+
+        lines = [
+            "Condition identity note: MC/DC condition identity is nodeId; condition text may repeat across different nodeIds.",
+            "",
+            "The following MC/DC condition polarities are NOT yet covered:",
+        ]
         for item in unvisited:
             missing = []
             if item["needs_true"]:
@@ -271,21 +373,39 @@ class TestSuite:
                 else "line+?"
             )
             lines.append(
-                f"  • [{line_tag}] {item['condition']!r} — missing: {', '.join(missing)}"
+                f"  • [node:{item['condition_id']} {line_tag}] {item['condition']!r} — missing: {', '.join(missing)}"
+            )
+
+        if suspected:
+            lines.append(
+                "\nPotentially stuck obligations (opposite polarity seen repeatedly):"
+            )
+            for item, pol in suspected[:5]:
+                line_tag = (
+                    f"line+{item['line_in_function']}"
+                    if item["line_in_function"] is not None
+                    else "line+?"
+                )
+                need = "TRUE" if pol else "FALSE"
+                lines.append(
+                    f"  • [node:{item['condition_id']} {line_tag}] need {need} for {item['condition']!r}"
+                )
+            lines.append(
+                "  Do not fixate on these first; cover other obligations, then retry with a different baseline/path."
             )
 
         if self.consecutive_redundant >= 3:
             lines.append(
-                "\nWARNING: You have produced 3 consecutive REDUNDANT tests (0 new MC/DC pairs). "
-                "You are stuck. DO NOT call any more tools. "
-                "Output your final 'DONE: <summary>' message immediately to finish the task."
+                "\nWARNING: 3+ consecutive redundant tests (0 new MC/DC pairs). "
+                "You are likely stuck at a local optimum. "
+                "Do NOT keep issuing near-duplicate tests. "
+                "Switch to a different nodeId family/branch structure. "
+                "If the next attempt is still redundant, output final DONE summary immediately to stop token waste."
             )
         elif self.consecutive_redundant == 2:
             lines.append(
-                "\nCAUTION: 2 consecutive redundant tests. You are likely stuck on the same path. "
-                "Change your approach completely: try different variable values, operator boundaries, "
-                "or a different code path entirely. If you cannot cover the remaining conditions, "
-                "declare DONE on the next step."
+                "\nCAUTION: 2 consecutive redundant tests. Switch to a different baseline passing test and "
+                "drive a different code path for the targeted nodeId/polarity."
             )
 
         lines.append(

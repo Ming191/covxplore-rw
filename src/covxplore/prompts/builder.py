@@ -76,6 +76,9 @@ class PromptBuilder:
             "Do NOT call static condition/context fetch tools again; they are already provided below.\n"
             "Generate one focused test body and call execute_testcase.\n"
             "After each execution, use coverage feedback to target the next uncovered conditions.\n"
+            "Condition identity is nodeId only.\n"
+            "Always cite nodeId when planning/justifying a test.\n"
+            "Target exactly one uncovered obligation per iteration before calling execute_testcase.\n"
             "Stop when all MC/DC conditions are covered or the iteration budget is exhausted."
         ]
 

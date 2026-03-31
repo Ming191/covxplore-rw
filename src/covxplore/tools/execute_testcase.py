@@ -200,23 +200,28 @@ def _format_condition_trace(result: TestResult) -> str | None:
     if is_failure_status(result.status):
         return None
 
-    trace_map: dict[str, tuple[bool, bool, int | None]] = {}
-    for entry in result.condition_trace:
-        prev = trace_map.get(entry.condition, (False, False, entry.line_in_function))
-        trace_map[entry.condition] = (
-            prev[0] or entry.true_branch_visited,
-            prev[1] or entry.false_branch_visited,
-            prev[2] if prev[2] is not None else entry.line_in_function,
-        )
-
-    if not trace_map:
-        return None
-
     lines = ["Condition evaluation this test:"]
-    for cond, (tv, fv, line) in trace_map.items():
-        t_mark = "YES" if tv else "NO "
-        f_mark = "YES" if fv else "NO "
-        line_tag = f"line+{line}" if line is not None else "line+?"
-        lines.append(f"  [{line_tag}] {cond!r:50s}  TRUE={t_mark}  FALSE={f_mark}")
+    sorted_trace = sorted(
+        result.condition_trace,
+        key=lambda e: (
+            e.node_id is None,
+            e.node_id if e.node_id is not None else float("inf"),
+            e.line_in_function is None,
+            e.line_in_function if e.line_in_function is not None else float("inf"),
+            e.condition,
+        ),
+    )
+    for entry in sorted_trace:
+        t_mark = "YES" if entry.true_branch_visited else "NO"
+        f_mark = "YES" if entry.false_branch_visited else "NO"
+        node_tag = entry.node_id if entry.node_id is not None else "?"
+        line_tag = (
+            f"line+{entry.line_in_function}"
+            if entry.line_in_function is not None
+            else "line+?"
+        )
+        lines.append(
+            f"  [node:{node_tag} {line_tag}] {entry.condition!r} TRUE={t_mark} FALSE={f_mark}"
+        )
 
     return "\n".join(lines)
