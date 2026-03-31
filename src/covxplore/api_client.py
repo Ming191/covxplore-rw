@@ -1,10 +1,3 @@
-"""
-Synchronous HTTP client for the AkaUT Spring Boot REST API.
-
-All methods raise ``AkaUTError`` on non-2xx responses, so callers can
-catch a single exception type without inspecting status codes.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,16 +10,9 @@ from covxplore.status import normalize_test_status
 
 
 class AkaUTError(Exception):
-    """Raised when the AkaUT API returns an error or is unreachable."""
-
     def __init__(self, message: str, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
-
-
-# ---------------------------------------------------------------------------
-# Typed return types (lightweight; Pydantic models live in models.py)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -66,14 +52,11 @@ class ConditionsResult:
 
     @property
     def total_mcdc_pairs(self) -> int:
-        """Each condition requires true + false branch → 2 pairs each."""
         return self.total_conditions * 2
 
 
 @dataclass
 class ExecuteResult:
-    """Raw deserialized JSON from POST /api/testcase/execute."""
-
     raw: dict[str, Any]
 
     @property
@@ -113,19 +96,7 @@ class ExecuteResult:
         return self.raw.get("traceSummary")
 
 
-# ---------------------------------------------------------------------------
-# Client
-# ---------------------------------------------------------------------------
-
-
 class AkaUTClient:
-    """Thin synchronous wrapper around the AkaUT REST API.
-
-    Uses a single shared ``httpx.Client`` for connection reuse.
-    Thread-safety: the client is not shared across threads; create one
-    instance per thread / agent worker.
-    """
-
     def __init__(self, base_url: str | None = None, timeout: int | None = None):
         cfg = get_settings()
         self._base = (base_url or cfg.akaut_base_url).rstrip("/")
@@ -140,10 +111,6 @@ class AkaUTClient:
 
     def __exit__(self, *_) -> None:
         self.close()
-
-    # ------------------------------------------------------------------ #
-    # Internal helpers                                                     #
-    # ------------------------------------------------------------------ #
 
     def _get(self, path: str, params: dict | None = None) -> Any:
         url = f"{self._base}{path}"
@@ -169,12 +136,7 @@ class AkaUTClient:
             )
         return r.json()
 
-    # ------------------------------------------------------------------ #
-    # Public API methods                                                   #
-    # ------------------------------------------------------------------ #
-
     def get_function_context(self, absolute_path: str) -> ContextResult:
-        """POST /api/context — returns the dependency context for a function."""
         absolute_path = absolute_path.replace("\\", "/")
         data = self._post("/api/context", {"absolutePath": absolute_path})
         if "error" in data:
@@ -182,7 +144,6 @@ class AkaUTClient:
         return ContextResult(context=data["context"])
 
     def get_node_source(self, absolute_path: str) -> SourceResult:
-        """GET /api/node/source — returns raw C/C++ source of a node."""
         absolute_path = absolute_path.replace("\\", "/")
         data = self._get("/api/node/source", {"absolutePath": absolute_path})
         if "error" in data:
@@ -197,7 +158,6 @@ class AkaUTClient:
         query: str,
         types: list[str] | None = None,
     ) -> list[NodeInfo]:
-        """POST /api/search — search AST nodes by name/type."""
         payload: dict[str, Any] = {"query": query}
         if types:
             payload["types"] = types
@@ -216,7 +176,6 @@ class AkaUTClient:
         ]
 
     def get_node_conditions(self, absolute_path: str) -> ConditionsResult:
-        """GET /api/node/conditions — returns all MC/DC conditions via static CFG analysis."""
         absolute_path = absolute_path.replace("\\", "/")
         data = self._get("/api/node/conditions", {"absolutePath": absolute_path})
         if "error" in data:
@@ -242,7 +201,6 @@ class AkaUTClient:
         test_body: str,
         test_name: str | None = None,
     ) -> ExecuteResult:
-        """POST /api/testcase/execute — compile, run, and return coverage."""
         absolute_path = absolute_path.replace("\\", "/")
         payload: dict[str, Any] = {
             "absolutePath": absolute_path,

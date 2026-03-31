@@ -7,118 +7,71 @@ from typing import Any
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 
-# ---------------------------------------------------------------------------
-# Process-level registry  {worker_thread_id -> LLMInteractionLogger}
-# ---------------------------------------------------------------------------
 
-_registry: dict[int, "LLMInteractionLogger"] = {}
-_registry_lock = threading.Lock()
-
-
-def _register(logger: "LLMInteractionLogger", thread_id: int) -> None:
-    with _registry_lock:
-        _registry[thread_id] = logger
-
-
-def _unregister(thread_id: int) -> None:
-    with _registry_lock:
-        _registry.pop(thread_id, None)
-
-
-def _all_active() -> list["LLMInteractionLogger"]:
-    with _registry_lock:
-        return list(_registry.values())
-
-
-# ---------------------------------------------------------------------------
-# LiteLLM shim — registered once, dispatches to all active loggers
-# ---------------------------------------------------------------------------
-
-class _GlobalCallbackShim(CustomLogger):
-    """Registered once in litellm.callbacks; dispatches to all active loggers."""
-
-    def _dispatch(self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any) -> None:
-        for logger in _all_active():
-            logger._record(kwargs, response_obj, start_time, end_time)
-
-    def log_success_event(self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any) -> None:
-        self._dispatch(kwargs, response_obj, start_time, end_time)
-
-    async def async_log_success_event(self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any) -> None:
-        self._dispatch(kwargs, response_obj, start_time, end_time)
-
-
-_SHIM_LOCK = threading.Lock()
-_SHIM_REGISTERED = False
-
-
-def _ensure_shim_registered() -> None:
-    global _SHIM_REGISTERED
-    with _SHIM_LOCK:
-        if not _SHIM_REGISTERED:
-            litellm.callbacks = [_GlobalCallbackShim()] + list(litellm.callbacks)
-            _SHIM_REGISTERED = True
-
-
-# ---------------------------------------------------------------------------
-# CrewAI @after_llm_call hook — records iteration number per LLM call
-# ---------------------------------------------------------------------------
-
-def _install_crewai_hook() -> None:
-    """Register @after_llm_call if CrewAI hooks are available (no-op otherwise)."""
-    try:
-        from crewai.hooks import after_llm_call, LLMCallHookContext  # type: ignore
-
-        @after_llm_call
-        def _track_iteration(context: LLMCallHookContext) -> None:
-            for logger in _all_active():
-                logger._set_last_iteration(getattr(context, "iterations", 0))
-            return None  # keep original response
-
-    except Exception:
-        pass
-
-
-# ---------------------------------------------------------------------------
-# Public logger
-# ---------------------------------------------------------------------------
-
-class LLMInteractionLogger:
-    """Collects LLM interactions for one experiment run."""
+class LLMInteractionLogger(CustomLogger):
+    """Per-run LiteLLM CustomLogger. Call attach() after build_crew(), detach() in finally."""
 
     def __init__(self) -> None:
+        super().__init__()
         self._interactions: list[dict] = []
         self._call_index: int = 0
-        self._last_iteration: int = 0
         self._lock = threading.Lock()
-        self._thread_id: int = threading.current_thread().ident or 0
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _as_list(callbacks: Any) -> list[Any]:
+        if callbacks is None:
+            return []
+        if isinstance(callbacks, list):
+            return callbacks
+        return [callbacks]
+
+    @staticmethod
+    def _prepend_logger(callbacks: Any, logger: "LLMInteractionLogger") -> list[Any]:
+        items = LLMInteractionLogger._as_list(callbacks)
+        cleaned = [cb for cb in items if not isinstance(cb, LLMInteractionLogger)]
+        return [logger] + cleaned
+
+    @staticmethod
+    def _remove_logger(callbacks: Any, logger: "LLMInteractionLogger") -> list[Any]:
+        items = LLMInteractionLogger._as_list(callbacks)
+        return [cb for cb in items if cb is not logger]
 
     def attach(self) -> None:
-        """Start collecting calls made from this experiment run."""
-        _ensure_shim_registered()
-        _register(self, self._thread_id)
+        # Legacy callback entrypoint (older LiteLLM versions)
+        litellm.callbacks = self._prepend_logger(litellm.callbacks, self)
+        # Active success callback entrypoints (current LiteLLM versions)
+        litellm.success_callback = self._prepend_logger(
+            getattr(litellm, "success_callback", []), self
+        )
+        litellm._async_success_callback = self._prepend_logger(
+            getattr(litellm, "_async_success_callback", []), self
+        )
 
     def detach(self) -> None:
-        """Stop collecting and remove this logger from the registry."""
-        _unregister(self._thread_id)
+        litellm.callbacks = self._remove_logger(litellm.callbacks, self)
+        litellm.success_callback = self._remove_logger(
+            getattr(litellm, "success_callback", []), self
+        )
+        litellm._async_success_callback = self._remove_logger(
+            getattr(litellm, "_async_success_callback", []), self
+        )
 
-    def _set_last_iteration(self, n: int) -> None:
-        with self._lock:
-            self._last_iteration = n
+    def log_success_event(
+        self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:
+        self._record(kwargs, response_obj, start_time, end_time)
 
-    # ------------------------------------------------------------------
-    # Recording
-    # ------------------------------------------------------------------
+    async def async_log_success_event(
+        self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:
+        self._record(kwargs, response_obj, start_time, end_time)
 
-    def _record(self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any) -> None:
+    def _record(
+        self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:
         with self._lock:
             self._call_index += 1
             idx = self._call_index
-            iteration = self._last_iteration
 
         model: str = kwargs.get("model", "unknown")
         messages: list[dict] = kwargs.get("messages", [])
@@ -130,7 +83,6 @@ class LLMInteractionLogger:
 
         try:
             choice = response_obj.choices[0]
-            # reasoning_content lives on the Choices object (DeepSeek-R1, Gemini, etc.)
             thinking = getattr(choice, "reasoning_content", None) or None
             answer = getattr(choice.message, "content", None) or ""
             raw_tc = getattr(choice.message, "tool_calls", None)
@@ -164,31 +116,22 @@ class LLMInteractionLogger:
         except Exception:
             elapsed_ms = None
 
-        entry: dict = {
-            "call_index": idx,
-            "iteration": iteration,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "model": model,
-            "elapsed_ms": elapsed_ms,
-            "usage": usage,
-            "messages": messages,
-            "thinking": thinking,
-            "answer": answer,
-            "tool_calls": tool_calls,
-        }
-
         with self._lock:
-            self._interactions.append(entry)
-
-    # ------------------------------------------------------------------
-    # Output
-    # ------------------------------------------------------------------
+            self._interactions.append(
+                {
+                    "call_index": idx,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "model": model,
+                    "elapsed_ms": elapsed_ms,
+                    "usage": usage,
+                    "messages": messages,
+                    "thinking": thinking,
+                    "answer": answer,
+                    "tool_calls": tool_calls,
+                }
+            )
 
     @property
     def interactions(self) -> list[dict]:
         with self._lock:
             return list(self._interactions)
-
-
-# Install CrewAI hook at import time
-_install_crewai_hook()

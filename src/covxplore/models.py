@@ -1,18 +1,3 @@
-"""
-Core data structures for covxplore.
-
-TestResult  — one executed test case + its coverage impact on the suite.
-TestSuite   — aggregate state of all generated tests, MC/DC bookkeeping.
-
-Design notes
-------------
-* A ConditionKey uniquely identifies one (condition-expression, branch-polarity) pair
-  that must be independently exercised for full MC/DC coverage.
-* TestSuite.add_result() is the only place ConditionKeys are added to the global
-  covered set, so delta calculations are always consistent.
-* Redundancy is decided at add-time: a test is redundant iff it covers 0 new keys.
-"""
-
 from __future__ import annotations
 
 import time
@@ -22,11 +7,6 @@ from typing import NamedTuple
 from pydantic import BaseModel, Field
 
 from covxplore.status import TestStatus, normalize_test_status
-
-
-# ---------------------------------------------------------------------------
-# Primitives mirroring the AkaUT REST response shape
-# ---------------------------------------------------------------------------
 
 
 class CoverageDetail(BaseModel):
@@ -80,22 +60,9 @@ class TraceSummary(BaseModel):
     visited_functions: list[str] = Field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# A unique key for one half of an MC/DC independence pair
-# (condition text, polarity that was exercised)
-# ---------------------------------------------------------------------------
-
-
 class ConditionKey(NamedTuple):
-    """Identifies one (condition-identity, polarity) pair within target function."""
-
     condition_id: int
-    polarity: bool  # True → true-branch exercised; False → false-branch
-
-
-# ---------------------------------------------------------------------------
-# TestResult — one executed test case
-# ---------------------------------------------------------------------------
+    polarity: bool
 
 
 class TestResult(BaseModel):
@@ -112,11 +79,9 @@ class TestResult(BaseModel):
     condition_trace: list[ConditionTraceEntry] = Field(default_factory=list)
     trace_summary: TraceSummary | None = None
 
-    # Metrics set by TestSuite.add_result()
     new_mcdc_pairs_covered: int = 0
     is_redundant: bool = False
 
-    # Token / timing bookkeeping (set by ExecuteTestcaseTool)
     token_input: int = 0
     token_output: int = 0
     elapsed_ms: float = 0.0
@@ -143,20 +108,8 @@ class TestResult(BaseModel):
         return keys
 
 
-# ---------------------------------------------------------------------------
-# TestSuite — aggregate state across all generated tests
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class TestSuite:
-    """Tracks the live state of all generated tests during a generation run.
-
-    Only TestResult objects whose ``status`` is PASSED or RUNTIME_ERROR are
-    considered for coverage bookkeeping (they still go into ``tests``).
-    FAILED is tracked for diagnostics but intentionally excluded from coverage deltas.
-    """
-
     function_path: str
 
     tests: list[TestResult] = field(default_factory=list)
@@ -166,16 +119,10 @@ class TestSuite:
     condition_id_to_text: dict[int, str] = field(default_factory=dict)
     condition_id_to_line: dict[int, int | None] = field(default_factory=dict)
     iteration_count: int = 0
-    consecutive_redundant: int = 0  # reset to 0 after any non-redundant result
+    consecutive_redundant: int = 0
     started_at: float = field(default_factory=time.monotonic)
 
-    # ------------------------------------------------------------------ #
-    # Core mutation                                                        #
-    # ------------------------------------------------------------------ #
-
     def add_result(self, result: TestResult, min_suite_size: int = 3) -> None:
-        """Register a new TestResult and update suite-level coverage tracking."""
-
         self.iteration_count += 1
         result.iteration = self.iteration_count
 
@@ -195,7 +142,6 @@ class TestSuite:
             else:
                 self.consecutive_redundant = 0
 
-            # Discover condition identities from execution response.
             discovered_ids: dict[int, str] = {}
             if result.condition_trace:
                 for e in result.condition_trace:
@@ -213,15 +159,10 @@ class TestSuite:
                 self.condition_id_to_text[cid] for cid in self.condition_id_to_text
             ]
 
-            # Update total_mcdc_conditions from execution response if not already set
             if self.total_mcdc_conditions == 0 and result.mcdc_coverage.total > 0:
                 self.total_mcdc_conditions = result.mcdc_coverage.total
 
         self.tests.append(result)
-
-    # ------------------------------------------------------------------ #
-    # Computed metrics                                                     #
-    # ------------------------------------------------------------------ #
 
     @property
     def mcdc_coverage_pct(self) -> float:
@@ -252,14 +193,7 @@ class TestSuite:
     def non_redundant_tests(self) -> list[TestResult]:
         return [t for t in self.tests if not t.is_redundant]
 
-    # ------------------------------------------------------------------ #
-    # Serialisation helpers                                                #
-    # ------------------------------------------------------------------ #
-
     def unvisited_summary(self) -> list[dict]:
-        """Return unvisited MC/DC conditions against suite's covered_keys.
-        Requires all_conditions to be pre-populated by _prefetch_conditions().
-        """
         result = []
         for cond_id, cond in self.condition_id_to_text.items():
             key_true = ConditionKey(cond_id, True)
@@ -279,11 +213,6 @@ class TestSuite:
         return result
 
     def coverage_gap_prompt_fragment(self) -> str:
-        """Return a terse, prompt-ready description of what still needs covering.
-
-        This is the CoverAgent-style local gap injection (arxiv:2402.09171):
-        *specific condition at specific location* rather than a global goal.
-        """
         if not self.tests:
             if self.total_mcdc_conditions > 0:
                 return (
@@ -345,7 +274,6 @@ class TestSuite:
                 f"  • [{line_tag}] {item['condition']!r} — missing: {', '.join(missing)}"
             )
 
-        # Warn the LLM when it's producing a run of redundant tests
         if self.consecutive_redundant >= 3:
             lines.append(
                 "\nWARNING: You have produced 3 consecutive REDUNDANT tests (0 new MC/DC pairs). "

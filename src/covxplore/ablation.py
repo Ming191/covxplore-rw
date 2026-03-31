@@ -72,10 +72,9 @@ class AblationRunner:
                     static_source_text=static_source_text,
                 ),
             }
-            # Attach after build_crew() so CrewAI's tracing setup
-            # (which resets litellm.callbacks) doesn't wipe our shim.
+            crew_obj = crew_inst.crew()
             llm_logger.attach()
-            crew_inst.crew().kickoff(inputs=inputs)
+            crew_obj.kickoff(inputs=inputs)
 
         except Exception as e:
             stop_reason = "error"
