@@ -44,6 +44,21 @@ class AblationRunner:
         suite: TestSuite = reset_shared_suite(config.function_path, config.run_id)
         _prefetch_conditions(suite)
 
+        if suite.total_mcdc_conditions == 0:
+            _console.print(
+                "[yellow]No MC/DC conditions found — skipping LLM run.[/]"
+            )
+            result = ExperimentResult(
+                config=config,
+                suite=suite,
+                stop_reason="no_conditions",
+                error_message=None,
+                llm_interactions=[],
+            )
+            _print_result_summary(result)
+            cleanup_suite(config.run_id)
+            return result
+
         stop_reason = "agent_done"
         error_msg = None
         crew_prompt_tokens = None

@@ -9,7 +9,8 @@ from covxplore.models import TestSuite
 from covxplore.status import TestStatus
 
 StopReason = Literal[
-    "max_iter", "coverage_target", "redundant_streak", "agent_done", "error"
+    "max_iter", "coverage_target", "redundant_streak", "agent_done", "error",
+    "no_conditions",
 ]
 
 
