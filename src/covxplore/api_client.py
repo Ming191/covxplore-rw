@@ -95,6 +95,14 @@ class ExecuteResult:
     def trace_summary(self) -> dict | None:
         return self.raw.get("traceSummary")
 
+    @property
+    def unvisited_statements(self) -> list[dict]:
+        return self.raw.get("unvisitedStatements") or []
+
+    @property
+    def unvisited_branches(self) -> list[dict]:
+        return self.raw.get("unvisitedBranches") or []
+
 
 class AkaUTClient:
     def __init__(self, base_url: str | None = None, timeout: int | None = None):

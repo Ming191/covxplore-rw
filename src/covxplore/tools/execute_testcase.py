@@ -12,7 +12,9 @@ from covxplore.models import (
     TestResult,
     TestSuite,
     TraceSummary,
+    UnvisitedBranch,
     UnvisitedMcdc,
+    UnvisitedStatement,
 )
 from covxplore.status import TestStatus, is_failure_status
 
@@ -140,6 +142,28 @@ class ExecuteTestcaseTool(BaseTool):
                 )
                 for u in raw.unvisited_mcdc_conditions
             ],
+            unvisited_statements=[
+                UnvisitedStatement(
+                    node_id=s.get("nodeId"),
+                    statement=s.get("statement", ""),
+                    line_in_function=s.get("lineInFunction"),
+                    start_offset=s.get("startOffsetInFunction"),
+                    end_offset=s.get("endOffsetInFunction"),
+                )
+                for s in raw.unvisited_statements
+            ],
+            unvisited_branches=[
+                UnvisitedBranch(
+                    node_id=b.get("nodeId"),
+                    condition=b.get("condition", ""),
+                    true_visited=b.get("trueVisited", False),
+                    false_visited=b.get("falseVisited", False),
+                    line_in_function=b.get("lineInFunction"),
+                    start_offset=b.get("startOffsetInFunction"),
+                    end_offset=b.get("endOffsetInFunction"),
+                )
+                for b in raw.unvisited_branches
+            ],
             condition_trace=[
                 ConditionTraceEntry(
                     node_id=e.get("nodeId"),
@@ -167,14 +191,19 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
     lines = []
     redundant_tag = " [REDUNDANT — 0 new MC/DC pairs]" if result.is_redundant else ""
     lines.append(f"===  {result.test_name} | {result.status}{redundant_tag} ===")
+    s = result.statement_coverage
+    b = result.branch_coverage
     m = result.mcdc_coverage
     lines.append(
-        f"This test  → MC/DC: {m.visited}/{m.total} "
-        f"({m.progress * 100:.0f}%) | +{result.new_mcdc_pairs_covered} new pairs"
+        f"This test  → Stmt: {s.visited}/{s.total} ({s.progress * 100:.0f}%) | "
+        f"Branch: {b.visited}/{b.total} ({b.progress * 100:.0f}%) | "
+        f"MC/DC: {m.visited}/{m.total} ({m.progress * 100:.0f}%) +{result.new_mcdc_pairs_covered} new pairs"
     )
     if suite:
         lines.append(
-            f"Suite total → MC/DC: {len(suite.covered_keys)}/{suite.total_mcdc_conditions} "
+            f"Suite best → Stmt: {suite.statement_coverage_pct * 100:.0f}% | "
+            f"Branch: {suite.branch_coverage_pct * 100:.0f}% | "
+            f"MC/DC: {len(suite.covered_keys)}/{suite.total_mcdc_conditions} "
             f"({suite.mcdc_coverage_pct * 100:.0f}%) | "
             f"iter={suite.iteration_count} | "
             f"redundancy={suite.redundancy_rate * 100:.0f}%"

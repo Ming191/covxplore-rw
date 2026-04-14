@@ -10,7 +10,6 @@ from covxplore.status import TestStatus
 
 StopReason = Literal[
     "max_iter", "coverage_target", "redundant_streak", "agent_done", "error",
-    "no_conditions",
 ]
 
 
@@ -110,6 +109,8 @@ class ExperimentResult:
             "stop_reason": self.stop_reason,
             "error": self.error_message,
             "metrics": {
+                "statement_coverage_pct": round(self.suite.statement_coverage_pct, 4),
+                "branch_coverage_pct": round(self.suite.branch_coverage_pct, 4),
                 "mcdc_coverage_pct": self.final_mcdc_pct,
                 "covered_mcdc_pairs": len(self.suite.covered_keys),
                 "total_mcdc_pairs": self.suite.total_mcdc_conditions,
@@ -149,6 +150,8 @@ class ExperimentResult:
             "function_path": self.config.function_path,
             "prompt_variant": self.config.prompt_variant,
             "stop_reason": self.stop_reason,
+            "statement_coverage_pct": round(self.suite.statement_coverage_pct, 4),
+            "branch_coverage_pct": round(self.suite.branch_coverage_pct, 4),
             "mcdc_coverage_pct": self.final_mcdc_pct,
             "covered_mcdc_pairs": len(self.suite.covered_keys),
             "total_mcdc_pairs": self.suite.total_mcdc_conditions,

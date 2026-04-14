@@ -46,18 +46,8 @@ class AblationRunner:
 
         if suite.total_mcdc_conditions == 0:
             _console.print(
-                "[yellow]No MC/DC conditions found — skipping LLM run.[/]"
+                "[yellow]No MC/DC conditions found — running for statement/branch coverage.[/]"
             )
-            result = ExperimentResult(
-                config=config,
-                suite=suite,
-                stop_reason="no_conditions",
-                error_message=None,
-                llm_interactions=[],
-            )
-            _print_result_summary(result)
-            cleanup_suite(config.run_id)
-            return result
 
         stop_reason = "agent_done"
         error_msg = None
@@ -127,11 +117,7 @@ class AblationRunner:
             _console.print(
                 f"[yellow]Stopped: {config.redundant_streak_limit} consecutive redundant tests[/]"
             )
-        elif final_suite.mcdc_coverage_pct >= config.mcdc_target or (
-            final_suite.iteration_count > 0
-            and final_suite.total_mcdc_conditions > 0
-            and not final_suite.unvisited_summary()
-        ):
+        elif _coverage_target_reached(final_suite, config):
             stop_reason = "coverage_target"
             error_msg = None
             _console.print("[green]Stopped gracefully: reached coverage target[/]")
@@ -238,6 +224,20 @@ class AblationRunner:
                 "[yellow]pandas not installed — CSV export skipped. "
                 "Install with: pip install pandas[/]"
             )
+
+
+def _coverage_target_reached(suite: "TestSuite", config: "ExperimentConfig") -> bool:
+    """Return True when all applicable coverage targets are satisfied."""
+    if suite.iteration_count == 0:
+        return False
+    mcdc_done = (
+        suite.total_mcdc_conditions == 0
+        or suite.mcdc_coverage_pct >= config.mcdc_target
+        or not suite.unvisited_summary()
+    )
+    stmt_done = not suite.cumulative_unvisited_statements
+    branch_done = not suite.cumulative_unvisited_branches
+    return mcdc_done and stmt_done and branch_done
 
 
 def _prefetch_conditions(suite: "TestSuite") -> None:

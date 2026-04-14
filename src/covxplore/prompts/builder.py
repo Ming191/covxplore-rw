@@ -67,19 +67,28 @@ class PromptBuilder:
         """Assemble the task description, injecting live coverage state."""
         from covxplore.models import TestSuite  # local import to avoid circular
 
+        has_mcdc = suite is not None and suite.total_mcdc_conditions > 0
+        coverage_target = (
+            "MC/DC, statement, and branch coverage"
+            if has_mcdc
+            else "statement and branch coverage"
+        )
         parts: list[str] = [
-            f"Generate MC/DC-covering test cases for the function at:\n"
+            f"Generate test cases to maximise {coverage_target} for the function at:\n"
             f"  {function_path}\n\n"
             "Workflow:\n"
             "Use the preloaded static data below as ground truth (conditions, context, source).\n"
             "If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol.\n"
             "Do NOT call static condition/context fetch tools again; they are already provided below.\n"
             "Generate one focused test body and call execute_testcase.\n"
-            "After each execution, use coverage feedback to target the next uncovered conditions.\n"
-            "Condition identity is nodeId only.\n"
-            "Always cite nodeId when planning/justifying a test.\n"
-            "Target exactly one uncovered obligation per iteration before calling execute_testcase.\n"
-            "Stop when all MC/DC conditions are covered or the iteration budget is exhausted."
+            "After each execution, use coverage feedback to target the next uncovered statements, branches, or conditions.\n"
+            + (
+                "Condition identity is nodeId only. Always cite nodeId when planning/justifying a test.\n"
+                "Target exactly one uncovered obligation per iteration before calling execute_testcase.\n"
+                if has_mcdc
+                else ""
+            )
+            + "Stop when all coverage targets are met or the iteration budget is exhausted."
         ]
 
         if static_conditions_text:
@@ -104,12 +113,16 @@ class PromptBuilder:
             assert isinstance(suite, TestSuite)
             gap = suite.coverage_gap_prompt_fragment()
             mcdc_pct = f"{suite.mcdc_coverage_pct * 100:.0f}"
+            stmt_pct = f"{suite.statement_coverage_pct * 100:.0f}"
+            branch_pct = f"{suite.branch_coverage_pct * 100:.0f}"
             covered = len(suite.covered_keys)
             total = suite.total_mcdc_conditions
 
             section_text = _load_section("coverage_guidance").format(
                 coverage_gap=gap,
                 mcdc_pct=mcdc_pct,
+                stmt_pct=stmt_pct,
+                branch_pct=branch_pct,
                 covered=covered,
                 total=total,
                 remaining_iterations=remaining_iterations,
