@@ -232,17 +232,57 @@ class TestSuite:
 
     @property
     def statement_coverage_pct(self) -> float:
-        if self.total_statements == 0 or self.cumulative_uncovered_stmt_ids is None:
+        if self.total_statements == 0:
             return 0.0
-        covered = self.total_statements - len(self.cumulative_uncovered_stmt_ids)
-        return max(0.0, covered) / self.total_statements
+        return self.covered_statements / self.total_statements
 
     @property
     def branch_coverage_pct(self) -> float:
-        if self.total_branches == 0 or self.cumulative_uncovered_branch_keys is None:
+        if self.total_branches == 0:
             return 0.0
-        covered = self.total_branches - len(self.cumulative_uncovered_branch_keys)
-        return max(0.0, covered) / self.total_branches
+        return self.covered_branches / self.total_branches
+
+    @property
+    def covered_statements(self) -> int:
+        """Best-known covered statements, robust to inconsistent unvisited payloads."""
+        if self.total_statements == 0:
+            return 0
+
+        best_single = 0
+        for t in self.tests:
+            normalized = normalize_test_status(t.status)
+            if normalized in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}:
+                best_single = max(best_single, t.statement_coverage.visited)
+
+        derived = None
+        if self.cumulative_uncovered_stmt_ids is not None:
+            uncovered = len(self.cumulative_uncovered_stmt_ids)
+            if uncovered <= self.total_statements:
+                derived = self.total_statements - uncovered
+
+        covered = best_single if derived is None else max(best_single, derived)
+        return min(self.total_statements, max(0, covered))
+
+    @property
+    def covered_branches(self) -> int:
+        """Best-known covered branches, robust to node/side semantic mismatches."""
+        if self.total_branches == 0:
+            return 0
+
+        best_single = 0
+        for t in self.tests:
+            normalized = normalize_test_status(t.status)
+            if normalized in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}:
+                best_single = max(best_single, t.branch_coverage.visited)
+
+        derived = None
+        if self.cumulative_uncovered_branch_keys is not None:
+            uncovered = len(self.cumulative_uncovered_branch_keys)
+            if uncovered <= self.total_branches:
+                derived = self.total_branches - uncovered
+
+        covered = best_single if derived is None else max(best_single, derived)
+        return min(self.total_branches, max(0, covered))
 
     @property
     def cumulative_unvisited_statements(self) -> list[UnvisitedStatement]:
@@ -271,15 +311,17 @@ class TestSuite:
         for node_id, (true_missing, false_missing) in node_missing.items():
             if node_id in self._branch_node_info:
                 info = self._branch_node_info[node_id]
-                result.append(UnvisitedBranch(
-                    node_id=node_id,
-                    condition=info.condition,
-                    true_visited=not true_missing,
-                    false_visited=not false_missing,
-                    line_in_function=info.line_in_function,
-                    start_offset=info.start_offset,
-                    end_offset=info.end_offset,
-                ))
+                result.append(
+                    UnvisitedBranch(
+                        node_id=node_id,
+                        condition=info.condition,
+                        true_visited=not true_missing,
+                        false_visited=not false_missing,
+                        line_in_function=info.line_in_function,
+                        start_offset=info.start_offset,
+                        end_offset=info.end_offset,
+                    )
+                )
         return result
 
     @property
@@ -387,10 +429,27 @@ class TestSuite:
 
         # --- Check what is still missing ---
         mcdc_done = not has_mcdc or len(self.covered_keys) >= self.total_mcdc_conditions
-        cum_stmts = self.cumulative_unvisited_statements
-        cum_branches = self.cumulative_unvisited_branches
-        stmt_done = not cum_stmts
-        branch_done = not cum_branches
+        cum_stmts_raw = self.cumulative_unvisited_statements
+        cum_branches_raw = self.cumulative_unvisited_branches
+        # Guard against backend payload inconsistencies where unvisited detail
+        # cardinality can exceed reported totals.
+        cum_stmts = (
+            cum_stmts_raw
+            if self.total_statements == 0 or len(cum_stmts_raw) <= self.total_statements
+            else []
+        )
+        cum_branches = (
+            cum_branches_raw
+            if self.total_branches == 0 or len(cum_branches_raw) <= self.total_branches
+            else []
+        )
+        stmt_done = (
+            self.total_statements == 0
+            or self.covered_statements >= self.total_statements
+        )
+        branch_done = (
+            self.total_branches == 0 or self.covered_branches >= self.total_branches
+        )
 
         if mcdc_done and stmt_done and branch_done:
             return (
@@ -427,7 +486,9 @@ class TestSuite:
             def _is_suspected_stuck(item: dict, polarity: bool) -> bool:
                 if self.iteration_count < 6:
                     return False
-                target_seen = observed.get(ConditionKey(item["condition_id"], polarity), 0)
+                target_seen = observed.get(
+                    ConditionKey(item["condition_id"], polarity), 0
+                )
                 opposite_seen = observed.get(
                     ConditionKey(item["condition_id"], not polarity), 0
                 )
@@ -446,7 +507,9 @@ class TestSuite:
             )
 
             suspected = [
-                (item, pol) for item, pol in obligations if _is_suspected_stuck(item, pol)
+                (item, pol)
+                for item, pol in obligations
+                if _is_suspected_stuck(item, pol)
             ]
             non_stuck = [
                 (item, pol)
@@ -537,42 +600,68 @@ class TestSuite:
                 )
                 sections.append("\n".join(mcdc_lines))
         elif has_mcdc and mcdc_done:
-            sections.append(f"MC/DC: 100% covered ({self.total_mcdc_conditions}/{self.total_mcdc_conditions} pairs).")
+            sections.append(
+                f"MC/DC: 100% covered ({self.total_mcdc_conditions}/{self.total_mcdc_conditions} pairs)."
+            )
 
         # --- Statement section ---
         if not stmt_done:
             stmt_pct = f"{self.statement_coverage_pct * 100:.0f}"
-            stmt_lines = [
-                f"Statement coverage: {stmt_pct}% — "
-                f"{len(cum_stmts)} statement(s) not yet executed by any test:"
-            ]
-            for s in sorted(cum_stmts, key=lambda x: (x.line_in_function is None, x.line_in_function))[:15]:
-                line_tag = f"line+{s.line_in_function}" if s.line_in_function is not None else "line+?"
-                stmt_lines.append(f"  • [{line_tag}] {s.statement!r}")
-            if len(cum_stmts) > 15:
-                stmt_lines.append(f"  ... and {len(cum_stmts) - 15} more")
-            sections.append("\n".join(stmt_lines))
+            if not cum_stmts:
+                sections.append(
+                    f"Statement coverage: {stmt_pct}% — uncovered statement details unavailable from backend payload."
+                )
+            else:
+                stmt_lines = [
+                    f"Statement coverage: {stmt_pct}% — "
+                    f"{len(cum_stmts)} statement(s) not yet executed by any test:"
+                ]
+                for s in sorted(
+                    cum_stmts,
+                    key=lambda x: (x.line_in_function is None, x.line_in_function),
+                )[:15]:
+                    line_tag = (
+                        f"line+{s.line_in_function}"
+                        if s.line_in_function is not None
+                        else "line+?"
+                    )
+                    stmt_lines.append(f"  • [{line_tag}] {s.statement!r}")
+                if len(cum_stmts) > 15:
+                    stmt_lines.append(f"  ... and {len(cum_stmts) - 15} more")
+                sections.append("\n".join(stmt_lines))
 
         # --- Branch section ---
         if not branch_done:
             branch_pct = f"{self.branch_coverage_pct * 100:.0f}"
-            branch_lines = [
-                f"Branch coverage: {branch_pct}% — "
-                f"{len(cum_branches)} branch node(s) with uncovered side(s) across all tests:"
-            ]
-            for b in sorted(cum_branches, key=lambda x: (x.line_in_function is None, x.line_in_function))[:15]:
-                line_tag = f"line+{b.line_in_function}" if b.line_in_function is not None else "line+?"
-                missing_sides = []
-                if not b.true_visited:
-                    missing_sides.append("TRUE")
-                if not b.false_visited:
-                    missing_sides.append("FALSE")
-                branch_lines.append(
-                    f"  • [{line_tag}] {b.condition!r} — missing: {', '.join(missing_sides)}"
+            if not cum_branches:
+                sections.append(
+                    f"Branch coverage: {branch_pct}% — uncovered branch details unavailable from backend payload."
                 )
-            if len(cum_branches) > 15:
-                branch_lines.append(f"  ... and {len(cum_branches) - 15} more")
-            sections.append("\n".join(branch_lines))
+            else:
+                branch_lines = [
+                    f"Branch coverage: {branch_pct}% — "
+                    f"{len(cum_branches)} branch node(s) with uncovered side(s) across all tests:"
+                ]
+                for b in sorted(
+                    cum_branches,
+                    key=lambda x: (x.line_in_function is None, x.line_in_function),
+                )[:15]:
+                    line_tag = (
+                        f"line+{b.line_in_function}"
+                        if b.line_in_function is not None
+                        else "line+?"
+                    )
+                    missing_sides = []
+                    if not b.true_visited:
+                        missing_sides.append("TRUE")
+                    if not b.false_visited:
+                        missing_sides.append("FALSE")
+                    branch_lines.append(
+                        f"  • [{line_tag}] {b.condition!r} — missing: {', '.join(missing_sides)}"
+                    )
+                if len(cum_branches) > 15:
+                    branch_lines.append(f"  ... and {len(cum_branches) - 15} more")
+                sections.append("\n".join(branch_lines))
 
         return "\n\n".join(sections)
 
@@ -582,6 +671,8 @@ class TestSuite:
             "iteration_count": self.iteration_count,
             "statement_coverage_pct": round(self.statement_coverage_pct, 4),
             "branch_coverage_pct": round(self.branch_coverage_pct, 4),
+            "covered_statements": self.covered_statements,
+            "covered_branches": self.covered_branches,
             "mcdc_coverage_pct": round(self.mcdc_coverage_pct, 4),
             "total_statements": self.total_statements,
             "total_branches": self.total_branches,

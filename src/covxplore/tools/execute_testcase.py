@@ -18,6 +18,11 @@ from covxplore.models import (
 )
 from covxplore.status import TestStatus, is_failure_status
 
+
+class FatalToolError(BaseException):
+    pass
+
+
 _suites: dict[str, TestSuite] = {}
 _current_run_id: str | None = None
 
@@ -208,7 +213,10 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
             f"iter={suite.iteration_count} | "
             f"redundancy={suite.redundancy_rate * 100:.0f}%"
         )
-        gap = suite.coverage_gap_prompt_fragment()
+        try:
+            gap = suite.coverage_gap_prompt_fragment()
+        except RuntimeError as exc:
+            raise FatalToolError(str(exc)) from exc
         lines.append("")
         lines.append(gap)
 

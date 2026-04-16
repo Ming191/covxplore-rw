@@ -12,6 +12,7 @@ from covxplore.experiment import ExperimentResult
 
 _console = Console()
 
+
 def parse_function_paths(paths_file: Path) -> list[str]:
     """
     Read a paths file and return non-comment, non-empty lines.
@@ -140,6 +141,7 @@ def _run_one_process(
         rows.append(row)
     return rows
 
+
 def _write_pipeline_summary_rows(
     rows: list[dict],
     out_dir: Path,
@@ -160,14 +162,35 @@ def _write_pipeline_summary_rows(
         df.to_csv(csv_path, index=False)
     except ImportError:
         if rows:
-            fieldnames = ["function_name"] + [k for k in rows[0] if k != "function_name"]
+            fieldnames = ["function_name"] + [
+                k for k in rows[0] if k != "function_name"
+            ]
         else:
             fieldnames = [
-                "function_name", "run_id", "function_path", "prompt_variant",
-                "stop_reason", "mcdc_coverage_pct", "covered_mcdc_pairs",
-                "total_mcdc_pairs", "redundancy_rate", "total_input_tokens",
-                "total_output_tokens", "total_tokens", "elapsed_sec",
-                "iterations_used", "num_tests", "num_passing", "num_redundant", "error",
+                "function_name",
+                "run_id",
+                "function_path",
+                "prompt_variant",
+                "stop_reason",
+                "statement_coverage_pct",
+                "branch_coverage_pct",
+                "covered_statements",
+                "total_statements",
+                "covered_branches",
+                "total_branches",
+                "mcdc_coverage_pct",
+                "covered_mcdc_pairs",
+                "total_mcdc_pairs",
+                "redundancy_rate",
+                "total_input_tokens",
+                "total_output_tokens",
+                "total_tokens",
+                "elapsed_sec",
+                "iterations_used",
+                "num_tests",
+                "num_passing",
+                "num_redundant",
+                "error",
             ]
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)

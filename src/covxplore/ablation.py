@@ -81,7 +81,7 @@ class AblationRunner:
             llm_logger.attach()
             crew_obj.kickoff(inputs=inputs)
 
-        except Exception as e:
+        except BaseException as e:
             stop_reason = "error"
             error_msg = f"{type(e).__name__}: {e}"
             _console.print(f"[red]Error: {error_msg}[/]")
@@ -235,8 +235,13 @@ def _coverage_target_reached(suite: "TestSuite", config: "ExperimentConfig") -> 
         or suite.mcdc_coverage_pct >= config.mcdc_target
         or not suite.unvisited_summary()
     )
-    stmt_done = not suite.cumulative_unvisited_statements
-    branch_done = not suite.cumulative_unvisited_branches
+    stmt_done = (
+        suite.total_statements == 0
+        or suite.covered_statements >= suite.total_statements
+    )
+    branch_done = (
+        suite.total_branches == 0 or suite.covered_branches >= suite.total_branches
+    )
     return mcdc_done and stmt_done and branch_done
 
 

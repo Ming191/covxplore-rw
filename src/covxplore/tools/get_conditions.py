@@ -1,5 +1,3 @@
-"""GetConditionsStaticTool — wraps GET /api/node/conditions."""
-
 from __future__ import annotations
 
 from crewai.tools import BaseTool
@@ -14,27 +12,12 @@ class _Input(BaseModel):
         ...,
         description=(
             "The absolute path of the function node as returned by search_nodes, "
-            "e.g. '/project/src/foo.cpp\\\\MyNS::bar(int)'."
+            "e.g. '/project/src/foo.cpp/MyNS::bar(int)'."
         ),
     )
 
 
 class GetConditionsStaticTool(BaseTool):
-    """Retrieve all MC/DC conditions for a function via static CFG analysis.
-
-    Call this BEFORE writing any tests. It returns the complete list of boolean
-    sub-expressions that require both a true and a false branch for full MC/DC
-    coverage — no test execution needed.
-
-    Each entry in the result has:
-      • condition   — the boolean sub-expression text (e.g. 'p->indexNext < p->dataSize')
-      • line        — line offset from the start of the function
-      • startOffset / endOffset — byte offsets within the function source
-
-    Use this list to plan which conditions to target in each test, ensuring
-    every condition is exercised in both polarities.
-    """
-
     name: str = "get_conditions_static"
     description: str = (
         "Retrieve every MC/DC condition (boolean sub-expression) in a C/C++ function "

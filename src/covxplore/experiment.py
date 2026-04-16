@@ -1,4 +1,5 @@
 """Experiment data structures for the ablation study."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -9,7 +10,11 @@ from covxplore.models import TestSuite
 from covxplore.status import TestStatus
 
 StopReason = Literal[
-    "max_iter", "coverage_target", "redundant_streak", "agent_done", "error",
+    "max_iter",
+    "coverage_target",
+    "redundant_streak",
+    "agent_done",
+    "error",
 ]
 
 
@@ -96,6 +101,14 @@ class ExperimentResult:
     def iterations_used(self) -> int:
         return self.suite.iteration_count
 
+    @property
+    def covered_statements(self) -> int:
+        return self.suite.covered_statements
+
+    @property
+    def covered_branches(self) -> int:
+        return self.suite.covered_branches
+
     # ------------------------------------------------------------------ #
     # Serialisation                                                       #
     # ------------------------------------------------------------------ #
@@ -112,6 +125,10 @@ class ExperimentResult:
                 "statement_coverage_pct": round(self.suite.statement_coverage_pct, 4),
                 "branch_coverage_pct": round(self.suite.branch_coverage_pct, 4),
                 "mcdc_coverage_pct": self.final_mcdc_pct,
+                "covered_statements": self.covered_statements,
+                "total_statements": self.suite.total_statements,
+                "covered_branches": self.covered_branches,
+                "total_branches": self.suite.total_branches,
                 "covered_mcdc_pairs": len(self.suite.covered_keys),
                 "total_mcdc_pairs": self.suite.total_mcdc_conditions,
                 "redundancy_rate": self.redundancy_rate,
@@ -153,6 +170,10 @@ class ExperimentResult:
             "statement_coverage_pct": round(self.suite.statement_coverage_pct, 4),
             "branch_coverage_pct": round(self.suite.branch_coverage_pct, 4),
             "mcdc_coverage_pct": self.final_mcdc_pct,
+            "covered_statements": self.covered_statements,
+            "total_statements": self.suite.total_statements,
+            "covered_branches": self.covered_branches,
+            "total_branches": self.suite.total_branches,
             "covered_mcdc_pairs": len(self.suite.covered_keys),
             "total_mcdc_pairs": self.suite.total_mcdc_conditions,
             "redundancy_rate": self.redundancy_rate,
@@ -167,5 +188,4 @@ class ExperimentResult:
             ),
             "num_redundant": sum(1 for t in self.suite.tests if t.is_redundant),
             "error": self.error_message or "",
-            "tracing_url": self.tracing_url or "",
         }
