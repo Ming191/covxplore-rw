@@ -7,7 +7,6 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
-from covxplore.batch_runner import BatchGenerationRunner
 from covxplore.config import get_settings
 from covxplore.crew import build_crew
 from covxplore.experiment import ExperimentConfig, ExperimentResult
@@ -65,36 +64,25 @@ class AblationRunner:
             static_conditions_text, static_context_text, static_source_text = (
                 _prefetch_static_prompt_data(config.function_path)
             )
-            if prompt_config.batch_generation:
-                builder = PromptBuilder(prompt_config)
-                llm_logger.attach()
-                BatchGenerationRunner(prompt_config, builder).run(
-                    config,
-                    suite,
+            crew_inst, builder = build_crew(
+                prompt_config=prompt_config,
+                max_iterations=config.max_iterations,
+            )
+            assert isinstance(builder, PromptBuilder)
+            inputs = {
+                "agent_backstory": builder.system_prompt(),
+                "task_description": builder.task_description(
+                    function_path=config.function_path,
+                    suite=suite,
+                    remaining_iterations=config.max_iterations,
                     static_conditions_text=static_conditions_text,
                     static_context_text=static_context_text,
                     static_source_text=static_source_text,
-                )
-            else:
-                crew_inst, builder = build_crew(
-                    prompt_config=prompt_config,
-                    max_iterations=config.max_iterations,
-                )
-                assert isinstance(builder, PromptBuilder)
-                inputs = {
-                    "agent_backstory": builder.system_prompt(),
-                    "task_description": builder.task_description(
-                        function_path=config.function_path,
-                        suite=suite,
-                        remaining_iterations=config.max_iterations,
-                        static_conditions_text=static_conditions_text,
-                        static_context_text=static_context_text,
-                        static_source_text=static_source_text,
-                    ),
-                }
-                crew_obj = crew_inst.crew()
-                llm_logger.attach()
-                crew_obj.kickoff(inputs=inputs)
+                ),
+            }
+            crew_obj = crew_inst.crew()
+            llm_logger.attach()
+            crew_obj.kickoff(inputs=inputs)
 
         except Exception as e:
             stop_reason = "error"
@@ -119,16 +107,6 @@ class AblationRunner:
             final_suite = get_shared_suite() or suite
             final_suite.finished_at = time.monotonic()
             _reconcile_tokens(crew_obj, final_suite)
-            if prompt_config.batch_generation:
-                crew_prompt_tokens = sum(
-                    int((item.get("usage") or {}).get("prompt_tokens") or 0)
-                    for item in llm_logger.interactions
-                )
-                crew_completion_tokens = sum(
-                    int((item.get("usage") or {}).get("completion_tokens") or 0)
-                    for item in llm_logger.interactions
-                )
-
         # We must deduce early stops manually based on the final achieved coverage
         if final_suite.iteration_count >= config.max_iterations:
             stop_reason = "max_iter"

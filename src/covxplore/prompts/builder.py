@@ -49,7 +49,6 @@ class PromptBuilder:
             "cot_reasoning",
             "few_shot_examples",
             "output_format",
-            "batch_generation",
         ]
         parts = []
         for section in static_sections:
@@ -83,20 +82,11 @@ class PromptBuilder:
             "If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol.\n"
             "Do NOT call static condition/context fetch tools again; they are already provided below.\n"
         )
-        if self.config.batch_generation:
-            workflow += (
-                "Plan a small batch of diverse candidate test bodies for different uncovered obligations, then call execute_testcase for each candidate one at a time.\n"
-                "Stop executing more candidates as soon as coverage targets are met or the coverage feedback says no useful obligations remain.\n"
-            )
-        else:
-            workflow += "Generate one focused test body and call execute_testcase.\n"
+        workflow += "Generate one focused test body and call execute_testcase.\n"
         workflow += "After each execution, use coverage feedback to target the next uncovered statements, branches, or conditions.\n"
         if has_mcdc:
             workflow += "Condition identity is nodeId only. Always cite nodeId when planning/justifying a test.\n"
-            if self.config.batch_generation:
-                workflow += "Within a batch, target different nodeId-polarity obligations and avoid near-duplicate inputs.\n"
-            else:
-                workflow += "Target exactly one uncovered obligation per iteration before calling execute_testcase.\n"
+            workflow += "Target exactly one uncovered obligation per iteration before calling execute_testcase.\n"
         workflow += "Stop when all coverage targets are met or the iteration budget is exhausted."
         parts: list[str] = [workflow]
 
@@ -147,12 +137,6 @@ class PromptBuilder:
                 remaining_iterations=remaining_iterations,
             )
             parts.append(section_text)
-            if self.config.batch_generation:
-                from covxplore.target_classifier import build_target_hints
-
-                target_hints = build_target_hints(suite)
-                if target_hints:
-                    parts.append(target_hints)
 
         # Self-reflection (static text, included in a task, not system prompt)
         if self.config.self_reflection:
