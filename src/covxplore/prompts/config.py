@@ -26,6 +26,7 @@ class PromptConfig:
     self_reflection: bool = True    # S4
     few_shot_examples: bool = False # S5 — off by default (token-expensive)
     output_format: bool = True      # S6
+    batch_generation: bool = False  # Quick-win batch candidate planning
 
     def enabled_sections(self) -> list[str]:
         """Return ordered list of section names that are enabled."""
@@ -36,6 +37,7 @@ class PromptConfig:
             ("self_reflection",   self.self_reflection),
             ("few_shot_examples", self.few_shot_examples),
             ("output_format",     self.output_format),
+            ("batch_generation",  self.batch_generation),
         ]
         return [name for name, enabled in all_sections if enabled]
 

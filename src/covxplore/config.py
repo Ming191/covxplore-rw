@@ -31,6 +31,29 @@ class Settings(BaseSettings):
     default_prompt_variant: str = "full"
     ablation_repeat: int = 3  # runs per variant per function
 
+    def validate_for_generation(self) -> None:
+        """Fail fast when required generation settings are missing or invalid."""
+        missing: list[str] = []
+        if not self.deepseek_api_key.strip():
+            missing.append("DEEPSEEK_API_KEY")
+        if not self.akaut_base_url.strip():
+            missing.append("AKAUT_BASE_URL")
+        if not self.deepseek_base_url.strip():
+            missing.append("DEEPSEEK_BASE_URL")
+        if not self.deepseek_model.strip():
+            missing.append("DEEPSEEK_MODEL")
+
+        if missing:
+            raise ValueError("Missing required configuration: " + ", ".join(missing))
+        if self.max_iterations <= 0:
+            raise ValueError("MAX_ITERATIONS must be > 0")
+        if self.max_tokens <= 0:
+            raise ValueError("MAX_TOKENS must be > 0")
+        if self.request_timeout_sec <= 0:
+            raise ValueError("REQUEST_TIMEOUT_SEC must be > 0")
+        if not 0.0 <= self.mcdc_target <= 1.0:
+            raise ValueError("MCDC_TARGET must be between 0.0 and 1.0")
+
 
 _settings: Settings | None = None
 

@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-import json
+import time
 import traceback
 from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
 
+from covxplore.batch_runner import BatchGenerationRunner
 from covxplore.config import get_settings
 from covxplore.crew import build_crew
 from covxplore.experiment import ExperimentConfig, ExperimentResult
 from covxplore.llm_logger import LLMInteractionLogger
-from covxplore.models import TestSuite
 from covxplore.status import TestStatus
 from covxplore.prompts.registry import VARIANTS, get_variant
 from covxplore.prompts.builder import PromptBuilder
+from covxplore.results_export import write_experiment_results
+from covxplore.test_suite import TestSuite
 from covxplore.tools.execute_testcase import (
     get_shared_suite,
     reset_shared_suite,
@@ -55,33 +57,46 @@ class AblationRunner:
         crew_completion_tokens = None
         tracing_url = None
         crew_inst = None
+        crew_obj = None
         llm_logger = LLMInteractionLogger()
+        cfg.validate_for_generation()
 
         try:
             static_conditions_text, static_context_text, static_source_text = (
                 _prefetch_static_prompt_data(config.function_path)
             )
-            crew_inst, builder = build_crew(
-                prompt_config=prompt_config,
-                max_iterations=config.max_iterations,
-            )
-            assert isinstance(builder, PromptBuilder)
-            inputs = {
-                "agent_backstory": builder.system_prompt(),
-                "task_description": builder.task_description(
-                    function_path=config.function_path,
-                    suite=suite,
-                    remaining_iterations=config.max_iterations,
+            if prompt_config.batch_generation:
+                builder = PromptBuilder(prompt_config)
+                llm_logger.attach()
+                BatchGenerationRunner(prompt_config, builder).run(
+                    config,
+                    suite,
                     static_conditions_text=static_conditions_text,
                     static_context_text=static_context_text,
                     static_source_text=static_source_text,
-                ),
-            }
-            crew_obj = crew_inst.crew()
-            llm_logger.attach()
-            crew_obj.kickoff(inputs=inputs)
+                )
+            else:
+                crew_inst, builder = build_crew(
+                    prompt_config=prompt_config,
+                    max_iterations=config.max_iterations,
+                )
+                assert isinstance(builder, PromptBuilder)
+                inputs = {
+                    "agent_backstory": builder.system_prompt(),
+                    "task_description": builder.task_description(
+                        function_path=config.function_path,
+                        suite=suite,
+                        remaining_iterations=config.max_iterations,
+                        static_conditions_text=static_conditions_text,
+                        static_context_text=static_context_text,
+                        static_source_text=static_source_text,
+                    ),
+                }
+                crew_obj = crew_inst.crew()
+                llm_logger.attach()
+                crew_obj.kickoff(inputs=inputs)
 
-        except BaseException as e:
+        except Exception as e:
             stop_reason = "error"
             error_msg = f"{type(e).__name__}: {e}"
             _console.print(f"[red]Error: {error_msg}[/]")
@@ -89,20 +104,30 @@ class AblationRunner:
 
         finally:
             llm_logger.detach()
-            if crew_inst is not None:
+            if crew_obj is not None:
                 try:
-                    metrics = crew_inst.crew().usage_metrics
+                    metrics = crew_obj.usage_metrics
                     if metrics:
                         crew_prompt_tokens = metrics.prompt_tokens
                         crew_completion_tokens = metrics.completion_tokens
                 except Exception:
                     pass
                 try:
-                    tracing_url = getattr(crew_inst.crew(), "_telemetry_url", None)
+                    tracing_url = getattr(crew_obj, "_telemetry_url", None)
                 except Exception:
                     pass
             final_suite = get_shared_suite() or suite
-            _reconcile_tokens(crew_inst, final_suite)
+            final_suite.finished_at = time.monotonic()
+            _reconcile_tokens(crew_obj, final_suite)
+            if prompt_config.batch_generation:
+                crew_prompt_tokens = sum(
+                    int((item.get("usage") or {}).get("prompt_tokens") or 0)
+                    for item in llm_logger.interactions
+                )
+                crew_completion_tokens = sum(
+                    int((item.get("usage") or {}).get("completion_tokens") or 0)
+                    for item in llm_logger.interactions
+                )
 
         # We must deduce early stops manually based on the final achieved coverage
         if final_suite.iteration_count >= config.max_iterations:
@@ -191,39 +216,7 @@ class AblationRunner:
 
         Creates ``out_dir`` if it does not exist.
         """
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        # Full JSON (one file per run and one aggregate)
-        all_summaries = []
-        for r in results:
-            summary = r.to_summary_dict()
-            all_summaries.append(summary)
-            run_path = out_dir / f"{prefix}_{r.config.run_id}.json"
-            run_path.write_text(
-                json.dumps(summary, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-
-        agg_path = out_dir / f"{prefix}_all.json"
-        agg_path.write_text(
-            json.dumps(all_summaries, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        # Flat CSV
-        try:
-            import pandas as pd
-
-            rows = [r.to_flat_row() for r in results]
-            df = pd.DataFrame(rows)
-            csv_path = out_dir / f"{prefix}_summary.csv"
-            df.to_csv(csv_path, index=False)
-            _console.print(f"[green]Exported {len(results)} results to {out_dir}/[/]")
-        except ImportError:
-            _console.print(
-                "[yellow]pandas not installed — CSV export skipped. "
-                "Install with: pip install pandas[/]"
-            )
+        write_experiment_results(results, out_dir, prefix=prefix, console=_console)
 
 
 def _coverage_target_reached(suite: "TestSuite", config: "ExperimentConfig") -> bool:
@@ -314,18 +307,18 @@ def _prefetch_static_prompt_data(function_path: str) -> tuple[str, str, str]:
     return cond_text, ctx_text, src_text
 
 
-def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:
+def _reconcile_tokens(crew_obj, suite: "TestSuite") -> None:
     """Fallback token attribution after kickoff() completes.
 
     Distributes the overall metrics.prompt_tokens and metrics.completion_tokens
     evenly across all PASSED/RUNTIME_ERROR tests in the suite.
     """
-    if crew_inst is None:
+    if crew_obj is None:
         return
     if suite.total_input_tokens > 0 or suite.total_output_tokens > 0:
         return
     try:
-        metrics = crew_inst.crew().usage_metrics
+        metrics = crew_obj.usage_metrics
         total_prompt = getattr(metrics, "prompt_tokens", 0) or 0
         total_completion = getattr(metrics, "completion_tokens", 0) or 0
     except Exception:
@@ -354,6 +347,7 @@ def _print_result_summary(r: ExperimentResult) -> None:
         f"({m['covered_mcdc_pairs']}/{m['total_mcdc_pairs']})  |  "
         f"redundancy: {m['redundancy_rate'] * 100:.0f}%  |  "
         f"tokens: {m['total_tokens']:,}  |  "
+        f"llm_calls: {m['llm_call_count']}  |  "
         f"time: {m['elapsed_sec']:.1f}s  |  "
         f"stop: {r.stop_reason}"
     )
@@ -366,6 +360,7 @@ def _print_matrix_summary(results: list[ExperimentResult]) -> None:
     table.add_column("MC/DC %", justify="right")
     table.add_column("Redundancy %", justify="right")
     table.add_column("Tokens (total)", justify="right")
+    table.add_column("LLM calls", justify="right")
     table.add_column("Time (s)", justify="right")
     table.add_column("Stop reason")
 
@@ -376,6 +371,7 @@ def _print_matrix_summary(results: list[ExperimentResult]) -> None:
             f"{m['mcdc_coverage_pct'] * 100:.0f}%",
             f"{m['redundancy_rate'] * 100:.0f}%",
             f"{m['total_tokens']:,}",
+            f"{m['llm_call_count']}",
             f"{m['elapsed_sec']:.1f}",
             r.stop_reason,
         )

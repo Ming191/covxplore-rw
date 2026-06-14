@@ -17,7 +17,7 @@ class CovxploreCrew:
     """Single-agent crew for MC/DC coverage-driven test generation.
 
     Parameters passed at construction time (not from YAML):
-      tools          — the 4 AkaUT REST-API tools
+      tools          — active AkaUT REST-API tools for source lookup, search, and execution
       llm            — LLM instance or model string; defaults to Settings values
       max_iterations — run-level iteration cap for the agent loop
     """
@@ -37,6 +37,7 @@ class CovxploreCrew:
         self._tools = tools
 
         cfg = get_settings()
+        cfg.validate_for_generation()
         resolved_max_iterations = (
             max_iterations if max_iterations is not None else cfg.max_iterations
         )
@@ -95,8 +96,9 @@ def build_crew(
         GetNodeSourceTool(),
         SearchNodesTool(),
     ]
+    # Static context and condition data are preloaded into the task prompt by
+    # PromptBuilder. The agent only receives source/search/execution tools.
 
-    crew_inst: CovxploreCrew | None = None
     crew_cls = cast(Any, CovxploreCrew)
-    crew_inst = crew_cls(tools=tools, max_iterations=max_iterations)
+    crew_inst: CovxploreCrew = crew_cls(tools=tools, max_iterations=max_iterations)
     return crew_inst, builder

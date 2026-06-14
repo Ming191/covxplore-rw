@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from covxplore.config import get_settings
-from covxplore.models import TestSuite
+from covxplore.test_suite import TestSuite
 from covxplore.status import TestStatus
 
 StopReason = Literal[
@@ -109,6 +109,54 @@ class ExperimentResult:
     def covered_branches(self) -> int:
         return self.suite.covered_branches
 
+    @property
+    def llm_call_count(self) -> int:
+        return len(self.llm_interactions)
+
+    @property
+    def total_llm_elapsed_ms(self) -> float:
+        return round(
+            sum(
+                float(item.get("elapsed_ms") or 0)
+                for item in self.llm_interactions
+            ),
+            1,
+        )
+
+    @property
+    def avg_llm_elapsed_ms(self) -> float:
+        if self.llm_call_count == 0:
+            return 0.0
+        return round(self.total_llm_elapsed_ms / self.llm_call_count, 1)
+
+    @property
+    def total_execute_elapsed_ms(self) -> float:
+        return round(sum(t.elapsed_ms for t in self.suite.tests), 1)
+
+    @property
+    def avg_execute_elapsed_ms(self) -> float:
+        if not self.suite.tests:
+            return 0.0
+        return round(self.total_execute_elapsed_ms / len(self.suite.tests), 1)
+
+    @property
+    def mcdc_pairs_per_llm_call(self) -> float:
+        if self.llm_call_count == 0:
+            return 0.0
+        return round(len(self.suite.covered_keys) / self.llm_call_count, 4)
+
+    @property
+    def branches_per_llm_call(self) -> float:
+        if self.llm_call_count == 0:
+            return 0.0
+        return round(self.covered_branches / self.llm_call_count, 4)
+
+    @property
+    def statements_per_llm_call(self) -> float:
+        if self.llm_call_count == 0:
+            return 0.0
+        return round(self.covered_statements / self.llm_call_count, 4)
+
     # ------------------------------------------------------------------ #
     # Serialisation                                                       #
     # ------------------------------------------------------------------ #
@@ -137,6 +185,14 @@ class ExperimentResult:
                 "total_tokens": self.total_input_tokens + self.total_output_tokens,
                 "elapsed_sec": self.elapsed_sec,
                 "iterations_used": self.iterations_used,
+                "llm_call_count": self.llm_call_count,
+                "total_llm_elapsed_ms": self.total_llm_elapsed_ms,
+                "avg_llm_elapsed_ms": self.avg_llm_elapsed_ms,
+                "total_execute_elapsed_ms": self.total_execute_elapsed_ms,
+                "avg_execute_elapsed_ms": self.avg_execute_elapsed_ms,
+                "statements_per_llm_call": self.statements_per_llm_call,
+                "branches_per_llm_call": self.branches_per_llm_call,
+                "mcdc_pairs_per_llm_call": self.mcdc_pairs_per_llm_call,
             },
             "tracing_url": self.tracing_url,
             "llm_interactions": self.llm_interactions,
@@ -145,6 +201,8 @@ class ExperimentResult:
                     "test_name": t.test_name,
                     "status": t.status,
                     "new_mcdc_pairs_covered": t.new_mcdc_pairs_covered,
+                    "new_statements_covered": t.new_statements_covered,
+                    "new_branches_covered": t.new_branches_covered,
                     "is_redundant": t.is_redundant,
                     "iteration": t.iteration,
                     "elapsed_ms": round(t.elapsed_ms, 1),
@@ -187,5 +245,13 @@ class ExperimentResult:
                 1 for t in self.suite.tests if t.status == TestStatus.PASSED.value
             ),
             "num_redundant": sum(1 for t in self.suite.tests if t.is_redundant),
+            "llm_call_count": self.llm_call_count,
+            "total_llm_elapsed_ms": self.total_llm_elapsed_ms,
+            "avg_llm_elapsed_ms": self.avg_llm_elapsed_ms,
+            "total_execute_elapsed_ms": self.total_execute_elapsed_ms,
+            "avg_execute_elapsed_ms": self.avg_execute_elapsed_ms,
+            "statements_per_llm_call": self.statements_per_llm_call,
+            "branches_per_llm_call": self.branches_per_llm_call,
+            "mcdc_pairs_per_llm_call": self.mcdc_pairs_per_llm_call,
             "error": self.error_message or "",
         }

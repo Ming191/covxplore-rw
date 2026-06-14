@@ -146,6 +146,20 @@ VARIANTS: dict[str, PromptConfig] = {
         few_shot_examples=True,
         output_format=True,
     ),
+
+    # ------------------------------------------------------------------ #
+    # Quick-win optimized variants                                        #
+    # ------------------------------------------------------------------ #
+    "batch_fast": PromptConfig(
+        "batch_fast",
+        role_persona=True,
+        cot_reasoning=False,
+        coverage_guidance=True,
+        self_reflection=False,
+        few_shot_examples=False,
+        output_format=True,
+        batch_generation=True,
+    ),
 }
 
 

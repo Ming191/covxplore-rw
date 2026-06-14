@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -8,7 +7,7 @@ from pathlib import Path
 from rich.console import Console
 
 from covxplore.ablation import AblationRunner
-from covxplore.experiment import ExperimentResult
+from covxplore.results_export import DEFAULT_FLAT_FIELDNAMES, write_rows_csv
 
 _console = Console()
 
@@ -151,50 +150,9 @@ def _write_pipeline_summary_rows(
     rows.sort(key=lambda r: (r["function_name"], r["prompt_variant"], r["run_id"]))
 
     csv_path = out_dir / "pipeline_summary.csv"
-
-    try:
-        import pandas as pd
-
-        df = pd.DataFrame(rows)
-        if not df.empty and "function_name" in df.columns:
-            cols = ["function_name"] + [c for c in df.columns if c != "function_name"]
-            df = df[cols]
-        df.to_csv(csv_path, index=False)
-    except ImportError:
-        if rows:
-            fieldnames = ["function_name"] + [
-                k for k in rows[0] if k != "function_name"
-            ]
-        else:
-            fieldnames = [
-                "function_name",
-                "run_id",
-                "function_path",
-                "prompt_variant",
-                "stop_reason",
-                "statement_coverage_pct",
-                "branch_coverage_pct",
-                "covered_statements",
-                "total_statements",
-                "covered_branches",
-                "total_branches",
-                "mcdc_coverage_pct",
-                "covered_mcdc_pairs",
-                "total_mcdc_pairs",
-                "redundancy_rate",
-                "total_input_tokens",
-                "total_output_tokens",
-                "total_tokens",
-                "elapsed_sec",
-                "iterations_used",
-                "num_tests",
-                "num_passing",
-                "num_redundant",
-                "error",
-            ]
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-
-    return csv_path
+    return write_rows_csv(
+        rows,
+        csv_path,
+        default_fieldnames=["function_name", *DEFAULT_FLAT_FIELDNAMES],
+        leading_columns=["function_name"],
+    )

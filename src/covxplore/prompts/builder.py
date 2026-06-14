@@ -1,8 +1,9 @@
 """PromptBuilder — assembles the final agent prompt from enabled sections.
 
 Dynamic placeholders in section files (``{coverage_gap}``, ``{mcdc_pct}``,
-``{covered}``, ``{total}``, ``{remaining_iterations}``) are filled at
-build-time from the live TestSuite state.
+``{covered}``, ``{total}``, ``{stmt_progress}``, ``{branch_progress}``,
+``{remaining_iterations}``) are filled at build-time from the live TestSuite
+state.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ class PromptBuilder:
             "cot_reasoning",
             "few_shot_examples",
             "output_format",
+            "batch_generation",
         ]
         parts = []
         for section in static_sections:
@@ -65,7 +67,7 @@ class PromptBuilder:
         static_source_text: str | None = None,
     ) -> str:
         """Assemble the task description, injecting live coverage state."""
-        from covxplore.models import TestSuite  # local import to avoid circular
+        from covxplore.test_suite import TestSuite  # local import to avoid circular
 
         has_mcdc = suite is not None and suite.total_mcdc_conditions > 0
         coverage_target = (
@@ -73,23 +75,30 @@ class PromptBuilder:
             if has_mcdc
             else "statement and branch coverage"
         )
-        parts: list[str] = [
+        workflow = (
             f"Generate test cases to maximise {coverage_target} for the function at:\n"
             f"  {function_path}\n\n"
             "Workflow:\n"
             "Use the preloaded static data below as ground truth (conditions, context, source).\n"
             "If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol.\n"
             "Do NOT call static condition/context fetch tools again; they are already provided below.\n"
-            "Generate one focused test body and call execute_testcase.\n"
-            "After each execution, use coverage feedback to target the next uncovered statements, branches, or conditions.\n"
-            + (
-                "Condition identity is nodeId only. Always cite nodeId when planning/justifying a test.\n"
-                "Target exactly one uncovered obligation per iteration before calling execute_testcase.\n"
-                if has_mcdc
-                else ""
+        )
+        if self.config.batch_generation:
+            workflow += (
+                "Plan a small batch of diverse candidate test bodies for different uncovered obligations, then call execute_testcase for each candidate one at a time.\n"
+                "Stop executing more candidates as soon as coverage targets are met or the coverage feedback says no useful obligations remain.\n"
             )
-            + "Stop when all coverage targets are met or the iteration budget is exhausted."
-        ]
+        else:
+            workflow += "Generate one focused test body and call execute_testcase.\n"
+        workflow += "After each execution, use coverage feedback to target the next uncovered statements, branches, or conditions.\n"
+        if has_mcdc:
+            workflow += "Condition identity is nodeId only. Always cite nodeId when planning/justifying a test.\n"
+            if self.config.batch_generation:
+                workflow += "Within a batch, target different nodeId-polarity obligations and avoid near-duplicate inputs.\n"
+            else:
+                workflow += "Target exactly one uncovered obligation per iteration before calling execute_testcase.\n"
+        workflow += "Stop when all coverage targets are met or the iteration budget is exhausted."
+        parts: list[str] = [workflow]
 
         if static_conditions_text:
             parts.append(
@@ -105,10 +114,6 @@ class PromptBuilder:
             parts.append(
                 f"PRELOADED FOCAL SOURCE (one-time snapshot):\n\n{static_source_text}"
             )
-
-        # Always include the goal
-
-        # Dynamic coverage guidance
         if self.config.coverage_guidance and suite is not None:
             assert isinstance(suite, TestSuite)
             gap = suite.coverage_gap_prompt_fragment()
@@ -117,17 +122,37 @@ class PromptBuilder:
             branch_pct = f"{suite.branch_coverage_pct * 100:.0f}"
             covered = len(suite.covered_keys)
             total = suite.total_mcdc_conditions
+            stmt_covered = suite.covered_statements
+            stmt_total = suite.total_statements
+            branch_covered = suite.covered_branches
+            branch_total = suite.total_branches
+            stmt_progress = (
+                f"{stmt_pct}% ({stmt_covered}/{stmt_total} covered)"
+                if stmt_total > 0
+                else "N/A (no executed testcase yet)"
+            )
+            branch_progress = (
+                f"{branch_pct}% ({branch_covered}/{branch_total} covered)"
+                if branch_total > 0
+                else "N/A (no executed testcase yet)"
+            )
 
             section_text = _load_section("coverage_guidance").format(
                 coverage_gap=gap,
                 mcdc_pct=mcdc_pct,
-                stmt_pct=stmt_pct,
-                branch_pct=branch_pct,
+                stmt_progress=stmt_progress,
+                branch_progress=branch_progress,
                 covered=covered,
                 total=total,
                 remaining_iterations=remaining_iterations,
             )
             parts.append(section_text)
+            if self.config.batch_generation:
+                from covxplore.target_classifier import build_target_hints
+
+                target_hints = build_target_hints(suite)
+                if target_hints:
+                    parts.append(target_hints)
 
         # Self-reflection (static text, included in a task, not system prompt)
         if self.config.self_reflection:

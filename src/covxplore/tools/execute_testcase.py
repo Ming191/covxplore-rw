@@ -6,21 +6,21 @@ from pydantic import BaseModel, Field
 
 from covxplore.api_client import AkaUTClient, AkaUTError, ExecuteResult
 from covxplore.config import get_settings
-from covxplore.models import (
+from covxplore.coverage_models import (
     ConditionTraceEntry,
     CoverageDetail,
     TestResult,
-    TestSuite,
     TraceSummary,
     UnvisitedBranch,
     UnvisitedMcdc,
     UnvisitedStatement,
 )
 from covxplore.status import TestStatus, is_failure_status
+from covxplore.test_suite import TestSuite
 
 
-class FatalToolError(BaseException):
-    pass
+class FatalToolError(RuntimeError):
+    """Fatal tool execution error that should stop the current generation run."""
 
 
 _suites: dict[str, TestSuite] = {}
@@ -73,6 +73,81 @@ class _Input(BaseModel):
     )
 
 
+def test_result_from_execute_result(
+    raw: ExecuteResult,
+    test_body: str,
+    elapsed_ms: float,
+) -> TestResult:
+    return TestResult(
+        test_name=raw.test_name,
+        test_body=test_body,
+        status=raw.status,
+        execute_log=raw.execute_log,
+        elapsed_ms=elapsed_ms,
+        statement_coverage=CoverageDetail(
+            visited=raw.statement_coverage.get("visited", 0),
+            total=raw.statement_coverage.get("total", 0),
+            progress=raw.statement_coverage.get("progress", 0.0),
+        ),
+        branch_coverage=CoverageDetail(
+            visited=raw.branch_coverage.get("visited", 0),
+            total=raw.branch_coverage.get("total", 0),
+            progress=raw.branch_coverage.get("progress", 0.0),
+        ),
+        mcdc_coverage=CoverageDetail(
+            visited=raw.mcdc_coverage.get("visited", 0),
+            total=raw.mcdc_coverage.get("total", 0),
+            progress=raw.mcdc_coverage.get("progress", 0.0),
+        ),
+        unvisited_mcdc=[
+            UnvisitedMcdc(
+                node_id=u.get("nodeId"),
+                condition=u.get("condition", ""),
+                true_branch_visited=u.get("trueBranchVisited", False),
+                false_branch_visited=u.get("falseBranchVisited", False),
+            )
+            for u in raw.unvisited_mcdc_conditions
+        ],
+        unvisited_statements=[
+            UnvisitedStatement(
+                node_id=s.get("nodeId"),
+                statement=s.get("statement", ""),
+                line_in_function=s.get("lineInFunction"),
+                start_offset=s.get("startOffsetInFunction"),
+                end_offset=s.get("endOffsetInFunction"),
+            )
+            for s in raw.unvisited_statements
+        ],
+        unvisited_branches=[
+            UnvisitedBranch(
+                node_id=b.get("nodeId"),
+                condition=b.get("condition", ""),
+                true_visited=b.get("trueVisited", False),
+                false_visited=b.get("falseVisited", False),
+                line_in_function=b.get("lineInFunction"),
+                start_offset=b.get("startOffsetInFunction"),
+                end_offset=b.get("endOffsetInFunction"),
+            )
+            for b in raw.unvisited_branches
+        ],
+        condition_trace=[
+            ConditionTraceEntry(
+                node_id=e.get("nodeId"),
+                condition=e.get("condition", ""),
+                true_branch_visited=e.get("trueBranchVisited", False),
+                false_branch_visited=e.get("falseBranchVisited", False),
+                line_in_function=e.get("lineInFunction"),
+                start_offset_in_function=e.get("startOffsetInFunction"),
+                end_offset_in_function=e.get("endOffsetInFunction"),
+            )
+            for e in raw.condition_trace
+        ],
+        trace_summary=TraceSummary(**raw.trace_summary)
+        if raw.trace_summary
+        else None,
+    )
+
+
 class ExecuteTestcaseTool(BaseTool):
     name: str = "execute_testcase"
     description: str = (
@@ -117,74 +192,7 @@ class ExecuteTestcaseTool(BaseTool):
 
         elapsed = (time.monotonic() - t0) * 1000
 
-        result = TestResult(
-            test_name=raw.test_name,
-            test_body=test_body,
-            status=raw.status,
-            execute_log=raw.execute_log,
-            elapsed_ms=elapsed,
-            statement_coverage=CoverageDetail(
-                visited=raw.statement_coverage.get("visited", 0),
-                total=raw.statement_coverage.get("total", 0),
-                progress=raw.statement_coverage.get("progress", 0.0),
-            ),
-            branch_coverage=CoverageDetail(
-                visited=raw.branch_coverage.get("visited", 0),
-                total=raw.branch_coverage.get("total", 0),
-                progress=raw.branch_coverage.get("progress", 0.0),
-            ),
-            mcdc_coverage=CoverageDetail(
-                visited=raw.mcdc_coverage.get("visited", 0),
-                total=raw.mcdc_coverage.get("total", 0),
-                progress=raw.mcdc_coverage.get("progress", 0.0),
-            ),
-            unvisited_mcdc=[
-                UnvisitedMcdc(
-                    node_id=u.get("nodeId"),
-                    condition=u.get("condition", ""),
-                    true_branch_visited=u.get("trueBranchVisited", False),
-                    false_branch_visited=u.get("falseBranchVisited", False),
-                )
-                for u in raw.unvisited_mcdc_conditions
-            ],
-            unvisited_statements=[
-                UnvisitedStatement(
-                    node_id=s.get("nodeId"),
-                    statement=s.get("statement", ""),
-                    line_in_function=s.get("lineInFunction"),
-                    start_offset=s.get("startOffsetInFunction"),
-                    end_offset=s.get("endOffsetInFunction"),
-                )
-                for s in raw.unvisited_statements
-            ],
-            unvisited_branches=[
-                UnvisitedBranch(
-                    node_id=b.get("nodeId"),
-                    condition=b.get("condition", ""),
-                    true_visited=b.get("trueVisited", False),
-                    false_visited=b.get("falseVisited", False),
-                    line_in_function=b.get("lineInFunction"),
-                    start_offset=b.get("startOffsetInFunction"),
-                    end_offset=b.get("endOffsetInFunction"),
-                )
-                for b in raw.unvisited_branches
-            ],
-            condition_trace=[
-                ConditionTraceEntry(
-                    node_id=e.get("nodeId"),
-                    condition=e.get("condition", ""),
-                    true_branch_visited=e.get("trueBranchVisited", False),
-                    false_branch_visited=e.get("falseBranchVisited", False),
-                    line_in_function=e.get("lineInFunction"),
-                    start_offset_in_function=e.get("startOffsetInFunction"),
-                    end_offset_in_function=e.get("endOffsetInFunction"),
-                )
-                for e in raw.condition_trace
-            ],
-            trace_summary=TraceSummary(**raw.trace_summary)
-            if raw.trace_summary
-            else None,
-        )
+        result = test_result_from_execute_result(raw, test_body, elapsed)
 
         if suite:
             suite.add_result(result, cfg.min_suite_size)
@@ -200,9 +208,12 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
     b = result.branch_coverage
     m = result.mcdc_coverage
     lines.append(
-        f"This test  → Stmt: {s.visited}/{s.total} ({s.progress * 100:.0f}%) | "
-        f"Branch: {b.visited}/{b.total} ({b.progress * 100:.0f}%) | "
-        f"MC/DC: {m.visited}/{m.total} ({m.progress * 100:.0f}%) +{result.new_mcdc_pairs_covered} new pairs"
+        f"This test  → Stmt: {s.visited}/{s.total} ({s.progress * 100:.0f}%) "
+        f"+{result.new_statements_covered} new | "
+        f"Branch: {b.visited}/{b.total} ({b.progress * 100:.0f}%) "
+        f"+{result.new_branches_covered} new | "
+        f"MC/DC: {m.visited}/{m.total} ({m.progress * 100:.0f}%) "
+        f"+{result.new_mcdc_pairs_covered} new pairs"
     )
     if suite:
         lines.append(
@@ -219,6 +230,8 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
             raise FatalToolError(str(exc)) from exc
         lines.append("")
         lines.append(gap)
+        lines.append("")
+        lines.append(_format_next_step_hint(result, suite))
 
     trace_block = _format_condition_trace(result)
     if trace_block:
@@ -229,6 +242,37 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
         lines.append(f"\nExecution log:\n{result.execute_log.strip()}")
 
     return "\n".join(lines)
+
+
+def _format_next_step_hint(result: TestResult, suite: TestSuite) -> str:
+    gained = (
+        result.new_statements_covered
+        + result.new_branches_covered
+        + result.new_mcdc_pairs_covered
+    )
+    remaining_parts = []
+    if suite.cumulative_unvisited_statements:
+        remaining_parts.append(f"{len(suite.cumulative_unvisited_statements)} stmt")
+    if suite.cumulative_unvisited_branches:
+        remaining_parts.append(f"{len(suite.cumulative_unvisited_branches)} branch-node")
+    if suite.unvisited_summary():
+        remaining_parts.append(f"{len(suite.unvisited_summary())} MC/DC node")
+    remaining = ", ".join(remaining_parts) if remaining_parts else "no known uncovered targets"
+
+    if gained > 0:
+        return (
+            f"Next-step hint: this candidate improved coverage; remaining targets: {remaining}. "
+            "Continue with a different uncovered nodeId/polarity that can add more coverage."
+        )
+    if result.is_redundant:
+        return (
+            f"Next-step hint: redundant candidate; remaining targets: {remaining}. "
+            "Do not retry a near-duplicate body. Switch input category, nodeId family, or branch polarity."
+        )
+    return (
+        f"Next-step hint: no new cumulative coverage from this candidate; remaining targets: {remaining}. "
+        "Prefer a structurally different path over small value tweaks."
+    )
 
 
 def _format_condition_trace(result: TestResult) -> str | None:
