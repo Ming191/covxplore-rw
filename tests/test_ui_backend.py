@@ -1,9 +1,26 @@
 from pathlib import Path
 
 from covxplore.api_client import normalize_trace_summary
+from covxplore_ui.app import create_app
 from covxplore_ui.manager import ManagedRun, RunManager
 from covxplore_ui.report import build_report_from_summary
 from covxplore_ui.results import summary_to_run_state
+
+
+def test_cors_allows_vite_preview_origin():
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_app())
+    response = client.options(
+        "/api/health",
+        headers={
+            "Origin": "http://127.0.0.1:4173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:4173"
 
 
 def test_normalize_trace_summary_camel_case():
@@ -59,7 +76,7 @@ def test_summary_to_run_state_uses_camel_case():
     assert state["tests"][0]["isPassed"] is True
 
 
-def test_run_manager_cancel_sets_state():
+def test_run_manager_cancel_marks_cancelling_until_worker_exits():
     manager = RunManager(default_out_dir=Path("missing-results"))
     run = ManagedRun(
         run_id="run_1",
@@ -73,9 +90,27 @@ def test_run_manager_cancel_sets_state():
     state = manager.cancel("run_1")
 
     assert state is not None
-    assert state["status"] == "cancelled"
+    assert state["status"] == "cancelling"
     assert run.cancel_event.is_set()
     assert run.events[-1].type == "log"
+
+
+def test_run_manager_cancelled_worker_emits_final_cancelled_event():
+    manager = RunManager(default_out_dir=Path("missing-results"))
+    run = ManagedRun(
+        run_id="run_1",
+        function_path="file.cpp\f()",
+        variant="full",
+        out_dir=Path("results"),
+        status="cancelling",
+    )
+    run.cancel_event.set()
+    manager._runs[run.run_id] = run
+
+    manager._finalize_cancelled_locked(run)
+
+    assert run.status == "cancelled"
+    assert run.events[-1].type == "run_cancelled"
 
 
 def test_run_manager_normalizes_completed_event_metrics():

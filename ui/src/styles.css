@@ -156,6 +156,29 @@ label select {
   width: 100%;
 }
 
+.visually-hidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+.input-row:focus-within {
+  border-color: #2364aa;
+  box-shadow: 0 0 0 3px rgba(35, 100, 170, 0.18);
+}
+
 .search-form button,
 .button-row button {
   align-items: center;

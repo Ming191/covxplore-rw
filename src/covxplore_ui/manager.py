@@ -176,7 +176,7 @@ class RunManager:
                 return None
             run.cancel_event.set()
             if run.status not in FINAL_STATUSES:
-                run.status = "cancelled"
+                run.status = "cancelling"
             self._append_event_locked(
                 run,
                 "log",
@@ -223,7 +223,7 @@ class RunManager:
                 state.result_path = str(result_path)
                 state.stop_reason = summary.get("stop_reason")
                 if state.cancel_event.is_set():
-                    state.status = "cancelled"
+                    self._finalize_cancelled_locked(state)
                 elif summary.get("error"):
                     state.status = "failed"
                 else:
@@ -237,11 +237,22 @@ class RunManager:
             with self._lock:
                 state.status = "cancelled" if state.cancel_event.is_set() else "failed"
                 state.error = f"{type(exc).__name__}: {exc}"
-                self._append_event_locked(
-                    state,
-                    "run_failed",
-                    {"runId": state.run_id, "error": state.error},
-                )
+                if state.cancel_event.is_set():
+                    self._finalize_cancelled_locked(state)
+                else:
+                    self._append_event_locked(
+                        state,
+                        "run_failed",
+                        {"runId": state.run_id, "error": state.error},
+                    )
+
+    def _finalize_cancelled_locked(self, run: ManagedRun) -> None:
+        run.status = "cancelled"
+        self._append_event_locked(
+            run,
+            "run_cancelled",
+            {"runId": run.run_id, "message": "Run cancelled."},
+        )
 
     def _append_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         with self._lock:
@@ -275,6 +286,8 @@ class RunManager:
             run.status = "failed"
             run.error = payload.get("error")
             run.metrics = keys_to_camel(payload.get("metrics") or run.metrics)
+        elif event_type == "run_cancelled":
+            run.status = "cancelled"
 
         event = EventRecord(
             index=len(run.events),

@@ -124,7 +124,7 @@ type RunTest = {
 
 type RunState = {
   runId: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
   functionPath: string;
   variant: string;
   metrics: CoverageMetrics;
@@ -209,27 +209,128 @@ type RunReport = {
   llmInteractions: LlmInteraction[];
 };
 
+export function appendUniqueUiEvent(current: UiEvent[], event: UiEvent): { events: UiEvent[]; wasAdded: boolean } {
+  if (current.some((item) => item.index === event.index)) {
+    return { events: current, wasAdded: false };
+  }
+  return { events: [...current, event].slice(-200), wasAdded: true };
+}
+
+export function parseUiEvent(raw: string): UiEvent | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<UiEvent>;
+    if (typeof parsed.index !== "number" || typeof parsed.type !== "string" || typeof parsed.runId !== "string") {
+      return null;
+    }
+    return {
+      index: parsed.index,
+      type: parsed.type,
+      runId: parsed.runId,
+      timestamp: typeof parsed.timestamp === "string" ? parsed.timestamp : "",
+      payload: parsed.payload && typeof parsed.payload === "object" ? (parsed.payload as Record<string, unknown>) : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function applyFunctionDetailIfCurrent(currentNode: NodeInfo | null, detail: FunctionDetail): FunctionDetail | null {
+  return currentNode?.absolutePath === detail.absolutePath ? detail : null;
+}
+
+export function normalizePositiveIntInput(value: string, min: number): number | null {
+  if (value.trim() === "") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min) return null;
+  return parsed;
+}
+
+export function normalizeErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (!item || typeof item !== "object") return String(item);
+        const record = item as Record<string, unknown>;
+        const location = Array.isArray(record.loc) ? record.loc.join(".") : "error";
+        const message = typeof record.msg === "string" ? record.msg : JSON.stringify(record);
+        return `${location}: ${message}`;
+      })
+      .join("; ");
+  }
+  if (detail && typeof detail === "object") return JSON.stringify(detail);
+  return "Request failed.";
+}
+
+export function shouldCloseEventStreamOnError(status?: RunState["status"] | null): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+type DetailTab = "source" | "conditions" | "context" | "sourceReport" | "testcases" | "summary" | "trace";
+
+export function nextReportTab(current: DetailTab, reportState: { hasTests: boolean; hasSource: boolean }, autoSwitch: boolean): DetailTab {
+  if (!autoSwitch) return current;
+  if (reportState.hasTests) return "testcases";
+  if (reportState.hasSource) return "sourceReport";
+  return current;
+}
+
+export function applyUiEventToRun(current: RunState | null, event: UiEvent, shouldApply = true): RunState | null {
+  if (!shouldApply || !current || current.runId !== event.runId) return current;
+  const payload = event.payload as Record<string, any>;
+  if (event.type === "run_started") {
+    return { ...current, status: "running" };
+  }
+  if (event.type === "static_prefetch_completed") {
+    return {
+      ...current,
+      status: "running",
+      metrics: {
+        ...current.metrics,
+        totalMcdcPairs: Number(payload.totalMcdcPairs ?? current.metrics.totalMcdcPairs ?? 0),
+        coveredMcdcPairs: current.metrics.coveredMcdcPairs ?? 0,
+        statementCoveragePct: current.metrics.statementCoveragePct ?? 0,
+        branchCoveragePct: current.metrics.branchCoveragePct ?? 0,
+        mcdcCoveragePct: current.metrics.mcdcCoveragePct ?? 0,
+      },
+    };
+  }
+  if (event.type === "test_completed") {
+    const test = payload as RunTest & { suite?: CoverageMetrics };
+    return {
+      ...current,
+      status: "running",
+      metrics: test.suite ?? current.metrics,
+      tests: [...current.tests, test],
+    };
+  }
+  if (event.type === "coverage_updated") {
+    return { ...current, status: "running", metrics: payload as CoverageMetrics };
+  }
+  return current;
+}
+
 export function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [query, setQuery] = useState("XMLElement::FindAttribute");
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
   const [selected, setSelected] = useState<NodeInfo | null>(null);
   const [detail, setDetail] = useState<FunctionDetail | null>(null);
-  const [detailTab, setDetailTab] = useState<
-    "source" | "conditions" | "context" | "sourceReport" | "testcases" | "summary" | "trace"
-  >("source");
+  const [detailTab, setDetailTab] = useState<DetailTab>("source");
   const [runs, setRuns] = useState<RunState[]>([]);
   const [activeRun, setActiveRun] = useState<RunState | null>(null);
   const [report, setReport] = useState<RunReport | null>(null);
   const [selectedTestKey, setSelectedTestKey] = useState<string | null>(null);
   const [events, setEvents] = useState<UiEvent[]>([]);
   const [variant, setVariant] = useState("full");
-  const [maxIterations, setMaxIterations] = useState(15);
-  const [maxTests, setMaxTests] = useState(15);
+  const [maxIterationsInput, setMaxIterationsInput] = useState("15");
+  const [maxTestsInput, setMaxTestsInput] = useState("15");
   const [mcdcTarget, setMcdcTarget] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const seenEventIndexesRef = useRef<Set<number>>(new Set());
+  const functionDetailRequestRef = useRef(0);
 
   useEffect(() => {
     refreshHealth();
@@ -254,7 +355,7 @@ export function App() {
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw new Error(body.detail ?? `${response.status} ${response.statusText}`);
+      throw new Error(body.detail ? normalizeErrorDetail(body.detail) : `${response.status} ${response.statusText}`);
     }
     return response.json();
   }
@@ -274,7 +375,7 @@ export function App() {
       const running = latestRuns.find((run) => isLiveStatus(run.status));
       if (running && activeRun?.runId !== running.runId) {
         setActiveRun(running);
-        await loadReport(running.runId, false);
+        await loadReport(running.runId, false, false);
         connectEvents(running.runId);
       }
     } catch (exc) {
@@ -303,20 +404,32 @@ export function App() {
   }
 
   async function selectFunction(node: NodeInfo) {
+    const requestId = ++functionDetailRequestRef.current;
     setSelected(node);
     setDetail(null);
     setError(null);
     try {
       const params = new URLSearchParams({ absolutePath: node.absolutePath });
-      setDetail(await request<FunctionDetail>(`/api/akaut/function?${params}`));
+      const nextDetail = await request<FunctionDetail>(`/api/akaut/function?${params}`);
+      if (requestId !== functionDetailRequestRef.current) return;
+      const currentDetail = applyFunctionDetailIfCurrent(node, nextDetail);
+      if (!currentDetail) return;
+      setDetail(currentDetail);
       setDetailTab("source");
     } catch (exc) {
+      if (requestId !== functionDetailRequestRef.current) return;
       setError(String(exc));
     }
   }
 
   async function startRun() {
     if (!selected) return;
+    const nextMaxIterations = normalizePositiveIntInput(maxIterationsInput, 1);
+    const nextMaxTests = normalizePositiveIntInput(maxTestsInput, 1);
+    if (nextMaxIterations === null || nextMaxTests === null) {
+      setError("Max iter and max tests must be whole numbers >= 1.");
+      return;
+    }
     if (liveRun || (activeRun && isLiveStatus(activeRun.status))) {
       setError("A run is already active. Cancel or wait for it before starting another run.");
       return;
@@ -324,14 +437,15 @@ export function App() {
     setBusy(true);
     setError(null);
     setEvents([]);
+    seenEventIndexesRef.current.clear();
     try {
       const run = await request<RunState>("/api/runs", {
         method: "POST",
         body: JSON.stringify({
           absolutePath: selected.absolutePath,
           variant,
-          maxIterations,
-          maxTests,
+          maxIterations: nextMaxIterations,
+          maxTests: nextMaxTests,
           mcdcTarget,
           outDir: "results",
         }),
@@ -339,6 +453,7 @@ export function App() {
       setActiveRun(run);
       setReport(null);
       setSelectedTestKey(null);
+      seenEventIndexesRef.current.clear();
       await refreshRuns();
       connectEvents(run.runId);
     } catch (exc) {
@@ -367,21 +482,26 @@ export function App() {
       const run = await request<RunState>(`/api/runs/${runId}`);
       setActiveRun(run);
       setEvents([]);
+      seenEventIndexesRef.current.clear();
       await loadReport(runId);
     } catch (exc) {
       setError(String(exc));
     }
   }
 
-  async function loadReport(runId: string, surfaceError = true) {
+  async function loadReport(runId: string, surfaceError = true, autoSwitchTab = true) {
     try {
       const nextReport = await request<RunReport>(`/api/runs/${runId}/report`);
       setReport(nextReport);
       const firstTest = nextReport.tests[0];
       setSelectedTestKey(firstTest ? testKey(firstTest) : null);
-      if (nextReport.source.lines.length || nextReport.tests.length) {
-        setDetailTab(nextReport.tests.length ? "testcases" : "sourceReport");
-      }
+      setDetailTab((current) =>
+        nextReportTab(
+          current,
+          { hasTests: nextReport.tests.length > 0, hasSource: nextReport.source.lines.length > 0 },
+          autoSwitchTab,
+        ),
+      );
     } catch (exc) {
       setReport(null);
       if (surfaceError) setError(String(exc));
@@ -401,6 +521,7 @@ export function App() {
       "coverage_updated",
       "run_completed",
       "run_failed",
+      "run_cancelled",
       "result_written",
       "log",
     ].forEach((eventName) => {
@@ -409,72 +530,44 @@ export function App() {
       );
     });
     source.onerror = async () => {
-      source.close();
       const run = await request<RunState>(`/api/runs/${runId}`).catch(() => null);
       if (run) {
         setActiveRun(run);
         await refreshRuns();
+        if (shouldCloseEventStreamOnError(run.status)) {
+          source.close();
+        }
       }
     };
   }
 
   function handleEventMessage(raw: string) {
-    const event = JSON.parse(raw) as UiEvent;
-    setEvents((current) => {
-      if (current.some((item) => item.index === event.index)) return current;
-      return [...current, event].slice(-200);
-    });
-    const payload = event.payload as Record<string, any>;
-    if (event.type === "run_started") {
-      setActiveRun((current) =>
-        current && current.runId === event.runId
-          ? { ...current, status: "running" }
-          : current,
-      );
+    const event = parseUiEvent(raw);
+    if (!event) {
+      setError("Ignored malformed live event.");
+      return;
     }
-    if (event.type === "static_prefetch_completed") {
-      setActiveRun((current) =>
-        current && current.runId === event.runId
-          ? {
-              ...current,
-              status: "running",
-              metrics: {
-                ...current.metrics,
-                totalMcdcPairs: Number(payload.totalMcdcPairs ?? current.metrics.totalMcdcPairs ?? 0),
-                coveredMcdcPairs: current.metrics.coveredMcdcPairs ?? 0,
-                statementCoveragePct: current.metrics.statementCoveragePct ?? 0,
-                branchCoveragePct: current.metrics.branchCoveragePct ?? 0,
-                mcdcCoveragePct: current.metrics.mcdcCoveragePct ?? 0,
-              },
-            }
-          : current,
-      );
+    if (seenEventIndexesRef.current.has(event.index)) return;
+    seenEventIndexesRef.current.add(event.index);
+    setEvents((current) => {
+      const next = appendUniqueUiEvent(current, event);
+      return next.events;
+    });
+    if (event.type === "run_started" || event.type === "static_prefetch_completed" || event.type === "test_completed" || event.type === "coverage_updated") {
+      setActiveRun((current) => applyUiEventToRun(current, event));
     }
     if (event.type === "test_completed") {
-      setActiveRun((current) => {
-        if (!current) return current;
-        const test = payload as RunTest & { suite?: CoverageMetrics };
-        return {
-          ...current,
-          status: "running",
-          metrics: test.suite ?? current.metrics,
-          tests: [...current.tests, test],
-        };
-      });
-      loadReport(event.runId, false);
+      loadReport(event.runId, false, false);
     }
     if (event.type === "coverage_updated") {
-      setActiveRun((current) =>
-        current ? { ...current, status: "running", metrics: payload as CoverageMetrics } : current,
-      );
-      loadReport(event.runId, false);
+      loadReport(event.runId, false, false);
     }
-    if (event.type === "run_completed" || event.type === "run_failed") {
+    if (event.type === "run_completed" || event.type === "run_failed" || event.type === "run_cancelled") {
       request<RunState>(`/api/runs/${event.runId}`)
         .then((run) => {
           setActiveRun(run);
           refreshRuns();
-          loadReport(event.runId, false);
+          loadReport(event.runId, false, false);
         })
         .catch(() => undefined);
     }
@@ -502,12 +595,12 @@ export function App() {
         <section className="panel compact">
           <div className="panel-title">
             <span>AkaUT</span>
-            <button className="icon-button" onClick={refreshHealth} title="Refresh health">
+            <button className="icon-button" onClick={refreshHealth} title="Refresh health" aria-label="Refresh health" type="button">
               <RefreshCw size={16} />
             </button>
           </div>
           <StatusPill
-            ok={!!health?.akaut.reachable && !!health?.akaut.environmentLoaded}
+            ok={!!health?.akaut.reachable && health?.akaut.environmentLoaded}
             text={
               health?.akaut.reachable
                 ? health.akaut.environmentLoaded
@@ -521,9 +614,11 @@ export function App() {
         </section>
 
         <form className="search-form" onSubmit={searchFunctions}>
+          <label className="visually-hidden" htmlFor="function-search">Search functions</label>
           <div className="input-row">
             <Search size={16} />
             <input
+              id="function-search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search functions"
@@ -538,6 +633,7 @@ export function App() {
         <div className="node-list">
           {nodes.map((node) => (
             <button
+              type="button"
               key={`${node.absolutePath}-${node.line}`}
               className={selected?.absolutePath === node.absolutePath ? "node active" : "node"}
               onClick={() => selectFunction(node)}
@@ -572,30 +668,30 @@ export function App() {
         </section>
 
         <section className="detail-tabs">
-          <div className="tabs">
-            <button className={detailTab === "source" ? "selected" : ""} onClick={() => setDetailTab("source")}>
+          <div className="tabs" role="tablist" aria-label="Function detail sections">
+            <button type="button" id="tab-source" role="tab" aria-selected={detailTab === "source"} aria-controls="panel-source" className={detailTab === "source" ? "selected" : ""} onClick={() => setDetailTab("source")}>
               <FileText size={15} /> Source
             </button>
-            <button className={detailTab === "conditions" ? "selected" : ""} onClick={() => setDetailTab("conditions")}>
+            <button type="button" id="tab-conditions" role="tab" aria-selected={detailTab === "conditions"} aria-controls="panel-conditions" className={detailTab === "conditions" ? "selected" : ""} onClick={() => setDetailTab("conditions")}>
               <CheckCircle2 size={15} /> Conditions
             </button>
-            <button className={detailTab === "context" ? "selected" : ""} onClick={() => setDetailTab("context")}>
+            <button type="button" id="tab-context" role="tab" aria-selected={detailTab === "context"} aria-controls="panel-context" className={detailTab === "context" ? "selected" : ""} onClick={() => setDetailTab("context")}>
               <TerminalSquare size={15} /> Context
             </button>
-            <button className={detailTab === "sourceReport" ? "selected" : ""} onClick={() => setDetailTab("sourceReport")}>
+            <button type="button" id="tab-source-report" role="tab" aria-selected={detailTab === "sourceReport"} aria-controls="panel-source-report" className={detailTab === "sourceReport" ? "selected" : ""} onClick={() => setDetailTab("sourceReport")}>
               <FileText size={15} /> Source Report
             </button>
-            <button className={detailTab === "testcases" ? "selected" : ""} onClick={() => setDetailTab("testcases")}>
+            <button type="button" id="tab-testcases" role="tab" aria-selected={detailTab === "testcases"} aria-controls="panel-testcases" className={detailTab === "testcases" ? "selected" : ""} onClick={() => setDetailTab("testcases")}>
               <CheckCircle2 size={15} /> Testcases
             </button>
-            <button className={detailTab === "summary" ? "selected" : ""} onClick={() => setDetailTab("summary")}>
+            <button type="button" id="tab-summary" role="tab" aria-selected={detailTab === "summary"} aria-controls="panel-summary" className={detailTab === "summary" ? "selected" : ""} onClick={() => setDetailTab("summary")}>
               <Activity size={15} /> Suite Summary
             </button>
-            <button className={detailTab === "trace" ? "selected" : ""} onClick={() => setDetailTab("trace")}>
+            <button type="button" id="tab-trace" role="tab" aria-selected={detailTab === "trace"} aria-controls="panel-trace" className={detailTab === "trace" ? "selected" : ""} onClick={() => setDetailTab("trace")}>
               <TerminalSquare size={15} /> LLM / Tool Trace
             </button>
           </div>
-          <div className="tab-body">
+          <div className="tab-body" role="tabpanel" id={`panel-${detailTab === "sourceReport" ? "source-report" : detailTab}`} aria-labelledby={`tab-${detailTab === "sourceReport" ? "source-report" : detailTab}`}>
             {!detail && !report && <div className="empty-state">No function or report selected.</div>}
             {detail && detailTab === "source" && <pre>{detail.source}</pre>}
             {detail && detailTab === "context" && <pre>{detail.context}</pre>}
@@ -647,11 +743,11 @@ export function App() {
           <div className="two-col">
             <label>
               Max iter
-              <input type="number" min={1} value={maxIterations} onChange={(e) => setMaxIterations(Number(e.target.value))} />
+              <input type="number" min={1} value={maxIterationsInput} onChange={(e) => setMaxIterationsInput(e.target.value)} />
             </label>
             <label>
               Max tests
-              <input type="number" min={1} value={maxTests} onChange={(e) => setMaxTests(Number(e.target.value))} />
+              <input type="number" min={1} value={maxTestsInput} onChange={(e) => setMaxTestsInput(e.target.value)} />
             </label>
           </div>
           <label>
@@ -659,11 +755,11 @@ export function App() {
             <input type="number" min={0} max={1} step={0.05} value={mcdcTarget} onChange={(e) => setMcdcTarget(Number(e.target.value))} />
           </label>
           <div className="button-row">
-            <button disabled={!selected || busy || Boolean(liveRun || (activeRun && isLiveStatus(activeRun.status)))} onClick={startRun}>
+            <button type="button" disabled={!selected || busy || normalizePositiveIntInput(maxIterationsInput, 1) === null || normalizePositiveIntInput(maxTestsInput, 1) === null || Boolean(liveRun || (activeRun && isLiveStatus(activeRun.status)))} onClick={startRun}>
               <Play size={16} />
               Start
             </button>
-            <button disabled={!visibleRun || !isLiveStatus(visibleRun.status)} onClick={cancelRun}>
+            <button type="button" disabled={!visibleRun || !isLiveStatus(visibleRun.status)} onClick={cancelRun}>
               <Square size={16} />
               Cancel
             </button>
@@ -724,13 +820,13 @@ export function App() {
         <section className="panel">
           <div className="panel-title">
             <span>Results</span>
-            <button className="icon-button" onClick={refreshRuns} title="Refresh results">
+            <button className="icon-button" onClick={refreshRuns} title="Refresh results" aria-label="Refresh results" type="button">
               <RefreshCw size={16} />
             </button>
           </div>
           <div className="result-list">
             {runs.map((run) => (
-              <button key={run.runId} onClick={() => loadRun(run.runId)}>
+              <button key={run.runId} onClick={() => loadRun(run.runId)} type="button">
                 <strong>{run.runId}</strong>
                 <small>{run.variant} - {pct(run.metrics.mcdcCoveragePct)} MC/DC</small>
               </button>
@@ -929,7 +1025,13 @@ function CoverageNodeChip({
   onSelectNode: (nodeId: number) => void;
 }) {
   return (
-    <button className="coverage-chip" title={`${kind}:${nodeId} ${label}`} onClick={() => onSelectNode(nodeId)}>
+    <button
+      className="coverage-chip"
+      title={`${kind}:${nodeId} ${label}`}
+      aria-label={`${kind === "C" ? "Condition" : "Branch"} ${nodeId}: true ${trueCovered ? "covered" : "missing"}, false ${falseCovered ? "covered" : "missing"}. ${label}`}
+      onClick={() => onSelectNode(nodeId)}
+      type="button"
+    >
       <span className="node-chip">{kind}:{nodeId}</span>
       <b className={trueCovered ? "tf true" : "tf missing"}>T</b>
       <b className={falseCovered ? "tf false" : "tf missing"}>F</b>
@@ -961,6 +1063,7 @@ function TestcaseInspector({
             className={testKey(test) === testKey(selected) ? "testcase-card selected" : "testcase-card"}
             key={testKey(test)}
             onClick={() => onSelectTest(testKey(test))}
+            type="button"
           >
             <span>#{test.iteration}</span>
             <strong>{test.testName}</strong>
@@ -1271,7 +1374,7 @@ function formatPairs(metrics?: CoverageMetrics) {
 }
 
 function isLiveStatus(status: RunState["status"]) {
-  return status === "queued" || status === "running";
+  return status === "queued" || status === "running" || status === "cancelling";
 }
 
 function testKey(test: Pick<RunTest, "iteration" | "testName">) {
