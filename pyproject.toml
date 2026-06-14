@@ -6,26 +6,29 @@ authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.10,<3.14"
 dependencies = [
     "crewai[litellm]",
+    "fastapi>=0.115.0",
     "httpx>=0.27.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "pandas>=2.0",
     "rich>=13.0",
     "python-dotenv>=1.0",
-    "pytest"
+    "pytest",
+    "uvicorn[standard]>=0.30.0"
 ]
 
 [project.scripts]
 covxplore-gen      = "covxplore.main:run_generation"
 covxplore-ablate   = "covxplore.main:run_ablation"
 covxplore-pipeline = "covxplore.main:run_parallel"
+covxplore-ui       = "covxplore_ui.main:run"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/covxplore"]
+packages = ["src/covxplore", "src/covxplore_ui"]
 
 [tool.crewai]
 type = "crew"

@@ -93,7 +93,7 @@ class ExecuteResult:
 
     @property
     def trace_summary(self) -> dict | None:
-        return self.raw.get("traceSummary")
+        return normalize_trace_summary(self.raw.get("traceSummary"))
 
     @property
     def unvisited_statements(self) -> list[dict]:
@@ -220,3 +220,22 @@ class AkaUTClient:
         if isinstance(data, dict) and "error" in data:
             raise AkaUTError(data["error"])
         return ExecuteResult(raw=data)
+
+
+def normalize_trace_summary(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not data:
+        return None
+    return {
+        "raw_step_count": data.get("rawStepCount", data.get("raw_step_count", 0)),
+        "target_function_step_count": data.get(
+            "targetFunctionStepCount", data.get("target_function_step_count", 0)
+        ),
+        "condition_step_count": data.get(
+            "conditionStepCount", data.get("condition_step_count", 0)
+        ),
+        "unique_condition_offsets": data.get(
+            "uniqueConditionOffsets", data.get("unique_condition_offsets", 0)
+        ),
+        "visited_functions": data.get("visitedFunctions", data.get("visited_functions", []))
+        or [],
+    }

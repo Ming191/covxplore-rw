@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import traceback
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.table import Table
 
 from covxplore.config import get_settings
 from covxplore.crew import build_crew
+from covxplore.events import CancelChecker, EventSink, emit_event, keys_to_camel
 from covxplore.experiment import ExperimentConfig, ExperimentResult
 from covxplore.llm_logger import LLMInteractionLogger
 from covxplore.models import TestSuite
@@ -16,19 +18,42 @@ from covxplore.status import TestStatus
 from covxplore.prompts.registry import VARIANTS, get_variant
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.tools.execute_testcase import (
+    configure_run_hooks,
     get_shared_suite,
     reset_shared_suite,
     cleanup_suite,
 )
 
 
-_console = Console()
+class _SafeConsole:
+    def __init__(self) -> None:
+        self._console = Console()
+
+    def print(self, *args: Any, **kwargs: Any) -> None:
+        try:
+            self._console.print(*args, **kwargs)
+        except OSError:
+            pass
+
+    def rule(self, *args: Any, **kwargs: Any) -> None:
+        try:
+            self._console.rule(*args, **kwargs)
+        except OSError:
+            pass
+
+
+_console = _SafeConsole()
 
 
 class AblationRunner:
     """Runs one or many experiments and collects results."""
 
-    def run_one(self, config: ExperimentConfig) -> ExperimentResult:
+    def run_one(
+        self,
+        config: ExperimentConfig,
+        event_sink: EventSink | None = None,
+        cancel_checker: CancelChecker | None = None,
+    ) -> ExperimentResult:
         """
         Execute a single experiment run end-to-end.
         """
@@ -42,7 +67,40 @@ class AblationRunner:
 
         # Reset the shared suite for this run
         suite: TestSuite = reset_shared_suite(config.function_path, config.run_id)
+        configure_run_hooks(
+            event_sink=event_sink,
+            cancel_checker=cancel_checker,
+            max_tests=config.max_tests,
+        )
+        emit_event(
+            event_sink,
+            "run_started",
+            {
+                "runId": config.run_id,
+                "functionPath": config.function_path,
+                "variant": config.prompt_variant,
+                "maxIterations": config.max_iterations,
+                "maxTests": config.max_tests,
+                "mcdcTarget": config.mcdc_target,
+            },
+        )
         _prefetch_conditions(suite)
+        emit_event(
+            event_sink,
+            "static_prefetch_completed",
+            {
+                "totalMcdcPairs": suite.total_mcdc_conditions,
+                "totalConditions": suite.total_mcdc_conditions // 2,
+                "conditions": [
+                    {
+                        "nodeId": cid,
+                        "condition": text,
+                        "lineInFunction": suite.condition_id_to_line.get(cid),
+                    }
+                    for cid, text in suite.condition_id_to_text.items()
+                ],
+            },
+        )
 
         if suite.total_mcdc_conditions == 0:
             _console.print(
@@ -56,14 +114,33 @@ class AblationRunner:
         tracing_url = None
         crew_inst = None
         llm_logger = LLMInteractionLogger()
+        static_snapshot: dict = {
+            "conditions": [
+                {
+                    "node_id": cid,
+                    "condition": text,
+                    "line_in_function": suite.condition_id_to_line.get(cid),
+                }
+                for cid, text in suite.condition_id_to_text.items()
+            ],
+            "context": None,
+            "source": None,
+        }
 
         try:
-            static_conditions_text, static_context_text, static_source_text = (
-                _prefetch_static_prompt_data(config.function_path)
-            )
+            if cancel_checker is not None and cancel_checker():
+                raise RuntimeError("Run cancelled before crew kickoff.")
+            (
+                static_conditions_text,
+                static_context_text,
+                static_source_text,
+                static_snapshot,
+            ) = _prefetch_static_prompt_data(config.function_path)
             crew_inst, builder = build_crew(
                 prompt_config=prompt_config,
                 max_iterations=config.max_iterations,
+                verbose=event_sink is None,
+                tracing=event_sink is None,
             )
             assert isinstance(builder, PromptBuilder)
             inputs = {
@@ -79,13 +156,32 @@ class AblationRunner:
             }
             crew_obj = crew_inst.crew()
             llm_logger.attach()
+            emit_event(
+                event_sink,
+                "log",
+                {
+                    "level": "info",
+                    "message": (
+                        "CrewAI kickoff started; waiting for the first LLM "
+                        "response before execute_testcase can run."
+                    ),
+                },
+            )
             crew_obj.kickoff(inputs=inputs)
+            emit_event(
+                event_sink,
+                "log",
+                {"level": "info", "message": "CrewAI kickoff completed."},
+            )
 
         except BaseException as e:
             stop_reason = "error"
             error_msg = f"{type(e).__name__}: {e}"
             _console.print(f"[red]Error: {error_msg}[/]")
-            traceback.print_exc()
+            try:
+                traceback.print_exc()
+            except OSError:
+                pass
 
         finally:
             llm_logger.detach()
@@ -103,6 +199,7 @@ class AblationRunner:
                     pass
             final_suite = get_shared_suite() or suite
             _reconcile_tokens(crew_inst, final_suite)
+            configure_run_hooks()
 
         # We must deduce early stops manually based on the final achieved coverage
         if final_suite.iteration_count >= config.max_iterations:
@@ -131,7 +228,32 @@ class AblationRunner:
             crew_completion_tokens=crew_completion_tokens,
             tracing_url=tracing_url,
             llm_interactions=llm_logger.interactions,
+            function_source=static_snapshot.get("source"),
+            function_context=static_snapshot.get("context"),
+            static_conditions=static_snapshot.get("conditions") or [],
         )
+        event_metrics = keys_to_camel(result.to_summary_dict()["metrics"])
+
+        if stop_reason == "error":
+            emit_event(
+                event_sink,
+                "run_failed",
+                {
+                    "runId": config.run_id,
+                    "error": error_msg,
+                    "metrics": event_metrics,
+                },
+            )
+        else:
+            emit_event(
+                event_sink,
+                "run_completed",
+                {
+                    "runId": config.run_id,
+                    "stopReason": stop_reason,
+                    "metrics": event_metrics,
+                },
+            )
 
         _print_result_summary(result)
         cleanup_suite(config.run_id)
@@ -298,7 +420,7 @@ def _format_conditions_for_prompt(result) -> str:
     return "\n".join(lines)
 
 
-def _prefetch_static_prompt_data(function_path: str) -> tuple[str, str, str]:
+def _prefetch_static_prompt_data(function_path: str) -> tuple[str, str, str, dict]:
     """Fetch static data once and return prompt-ready text blocks."""
     from covxplore.api_client import AkaUTClient
     from covxplore.tools.get_source import _number_lines
@@ -311,7 +433,21 @@ def _prefetch_static_prompt_data(function_path: str) -> tuple[str, str, str]:
     cond_text = _format_conditions_for_prompt(cond)
     ctx_text = ctx.context
     src_text = f"// Source: {function_path}\n{_number_lines(src.source)}"
-    return cond_text, ctx_text, src_text
+    snapshot = {
+        "source": src.source,
+        "context": ctx.context,
+        "conditions": [
+            {
+                "node_id": item.node_id,
+                "condition": item.condition,
+                "line_in_function": item.line_in_function,
+                "start_offset": item.start_offset,
+                "end_offset": item.end_offset,
+            }
+            for item in cond.conditions
+        ],
+    }
+    return cond_text, ctx_text, src_text, snapshot
 
 
 def _reconcile_tokens(crew_inst, suite: "TestSuite") -> None:

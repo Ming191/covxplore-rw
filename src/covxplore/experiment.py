@@ -25,6 +25,7 @@ class ExperimentConfig:
     function_path: str
     prompt_variant: str
     max_iterations: int = field(default_factory=lambda: get_settings().max_iterations)
+    max_tests: int | None = None
     mcdc_target: float = field(default_factory=lambda: get_settings().mcdc_target)
     redundant_streak_limit: int = field(
         default_factory=lambda: get_settings().redundant_streak_limit
@@ -49,6 +50,7 @@ class ExperimentConfig:
             "function_path": self.function_path,
             "prompt_variant": self.prompt_variant,
             "max_iterations": self.max_iterations,
+            "max_tests": self.max_tests,
             "mcdc_target": self.mcdc_target,
         }
 
@@ -68,6 +70,9 @@ class ExperimentResult:
     llm_interactions: list[dict] = field(
         default_factory=list
     )  # per-call thinking+answer log
+    function_source: str | None = None
+    function_context: str | None = None
+    static_conditions: list[dict] = field(default_factory=list)
 
     # ------------------------------------------------------------------ #
     # Derived metrics (computed from suite)                               #
@@ -140,6 +145,11 @@ class ExperimentResult:
             },
             "tracing_url": self.tracing_url,
             "llm_interactions": self.llm_interactions,
+            "function_source": self.function_source,
+            "function_context": self.function_context,
+            "static_conditions": self.static_conditions,
+            "total_conditions": len(self.static_conditions),
+            "total_mcdc_pairs": self.suite.total_mcdc_conditions,
             "test_suite": [
                 {
                     "test_name": t.test_name,
@@ -155,6 +165,21 @@ class ExperimentResult:
                     "mcdc_coverage": t.mcdc_coverage.model_dump(),
                     "statement_coverage": t.statement_coverage.model_dump(),
                     "branch_coverage": t.branch_coverage.model_dump(),
+                    "condition_trace": [
+                        entry.model_dump() for entry in t.condition_trace
+                    ],
+                    "trace_summary": (
+                        t.trace_summary.model_dump() if t.trace_summary else None
+                    ),
+                    "unvisited_mcdc": [
+                        item.model_dump() for item in t.unvisited_mcdc
+                    ],
+                    "unvisited_statements": [
+                        item.model_dump() for item in t.unvisited_statements
+                    ],
+                    "unvisited_branches": [
+                        item.model_dump() for item in t.unvisited_branches
+                    ],
                 }
                 for t in self.suite.tests
             ],

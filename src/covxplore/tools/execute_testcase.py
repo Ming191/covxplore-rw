@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from covxplore.api_client import AkaUTClient, AkaUTError, ExecuteResult
 from covxplore.config import get_settings
+from covxplore.events import CancelChecker, EventSink, emit_event, keys_to_camel
 from covxplore.models import (
     ConditionTraceEntry,
     CoverageDetail,
@@ -25,6 +26,9 @@ class FatalToolError(BaseException):
 
 _suites: dict[str, TestSuite] = {}
 _current_run_id: str | None = None
+_event_sink: EventSink | None = None
+_cancel_checker: CancelChecker | None = None
+_max_tests: int | None = None
 
 
 def get_shared_suite() -> TestSuite | None:
@@ -48,6 +52,18 @@ def reset_shared_suite(function_path: str, run_id: str) -> TestSuite:
 
 def cleanup_suite(run_id: str) -> None:
     _suites.pop(run_id, None)
+
+
+def configure_run_hooks(
+    *,
+    event_sink: EventSink | None = None,
+    cancel_checker: CancelChecker | None = None,
+    max_tests: int | None = None,
+) -> None:
+    global _event_sink, _cancel_checker, _max_tests
+    _event_sink = event_sink
+    _cancel_checker = cancel_checker
+    _max_tests = max_tests
 
 
 class _Input(BaseModel):
@@ -92,6 +108,42 @@ class ExecuteTestcaseTool(BaseTool):
         cfg = get_settings()
         suite = get_shared_suite()
 
+        if _cancel_checker is not None and _cancel_checker():
+            emit_event(
+                _event_sink,
+                "log",
+                {"level": "warning", "message": "Run cancellation requested."},
+            )
+            return "[CANCELLED] Run cancellation requested. Do not call more tools."
+
+        if (
+            _max_tests is not None
+            and suite is not None
+            and suite.iteration_count >= _max_tests
+        ):
+            emit_event(
+                _event_sink,
+                "log",
+                {
+                    "level": "warning",
+                    "message": f"Max tests reached ({_max_tests}).",
+                },
+            )
+            return (
+                f"[MAX_TESTS_REACHED] {_max_tests} tests have already been executed. "
+                "Output the final DONE summary without calling more tools."
+            )
+
+        emit_event(
+            _event_sink,
+            "test_started",
+            {
+                "testName": test_name,
+                "absolutePath": absolute_path,
+                "iteration": (suite.iteration_count + 1) if suite else None,
+            },
+        )
+
         t0 = time.monotonic()
         try:
             with AkaUTClient() as client:
@@ -103,16 +155,18 @@ class ExecuteTestcaseTool(BaseTool):
             failed = TestResult(
                 test_name=test_name or "unknown",
                 test_body=test_body,
-                status=TestStatus.COMPILE_ERROR.value,
+                status=TestStatus.INFRA_ERROR.value,
                 execute_log=str(exc),
                 elapsed_ms=elapsed,
             )
             if suite:
                 suite.add_result(failed, cfg.min_suite_size)
+            emit_event(_event_sink, "test_completed", _test_payload(failed, suite))
+            emit_event(_event_sink, "coverage_updated", _suite_payload(suite))
             return (
-                f"[COMPILE_ERROR] execute_testcase failed: {exc}\n"
-                "Review the test body for syntax errors, missing includes, or "
-                "incorrect variable types and try again."
+                f"[INFRA_ERROR] execute_testcase request failed: {exc}\n"
+                "This is an AkaUT REST/API/backend issue, not necessarily a C++ "
+                "compile error. Check AkaUT server, loaded environment, and path."
             )
 
         elapsed = (time.monotonic() - t0) * 1000
@@ -144,6 +198,9 @@ class ExecuteTestcaseTool(BaseTool):
                     condition=u.get("condition", ""),
                     true_branch_visited=u.get("trueBranchVisited", False),
                     false_branch_visited=u.get("falseBranchVisited", False),
+                    line_in_function=u.get("lineInFunction"),
+                    start_offset=u.get("startOffsetInFunction") or u.get("startOffset"),
+                    end_offset=u.get("endOffsetInFunction") or u.get("endOffset"),
                 )
                 for u in raw.unvisited_mcdc_conditions
             ],
@@ -189,6 +246,8 @@ class ExecuteTestcaseTool(BaseTool):
         if suite:
             suite.add_result(result, cfg.min_suite_size)
 
+        emit_event(_event_sink, "test_completed", _test_payload(result, suite))
+        emit_event(_event_sink, "coverage_updated", _suite_payload(suite))
         return _format_summary(result, suite)
 
 
@@ -229,6 +288,61 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
         lines.append(f"\nExecution log:\n{result.execute_log.strip()}")
 
     return "\n".join(lines)
+
+
+def _coverage_payload(cov: CoverageDetail) -> dict:
+    return {"visited": cov.visited, "total": cov.total, "progress": cov.progress}
+
+
+def _test_payload(result: TestResult, suite: TestSuite | None) -> dict:
+    return {
+        "iteration": result.iteration,
+        "testName": result.test_name,
+        "status": result.status,
+        "testBody": result.test_body,
+        "executeLog": result.execute_log,
+        "elapsedMs": result.elapsed_ms,
+        "statementCoverage": _coverage_payload(result.statement_coverage),
+        "branchCoverage": _coverage_payload(result.branch_coverage),
+        "mcdcCoverage": _coverage_payload(result.mcdc_coverage),
+        "newMcdcPairsCovered": result.new_mcdc_pairs_covered,
+        "isRedundant": result.is_redundant,
+        "unvisitedMcdc": keys_to_camel(
+            [item.model_dump() for item in result.unvisited_mcdc]
+        ),
+        "unvisitedStatements": keys_to_camel(
+            [item.model_dump() for item in result.unvisited_statements]
+        ),
+        "unvisitedBranches": keys_to_camel(
+            [item.model_dump() for item in result.unvisited_branches]
+        ),
+        "conditionTrace": keys_to_camel(
+            [item.model_dump() for item in result.condition_trace]
+        ),
+        "traceSummary": keys_to_camel(
+            result.trace_summary.model_dump() if result.trace_summary else {}
+        ),
+        "suite": _suite_payload(suite),
+    }
+
+
+def _suite_payload(suite: TestSuite | None) -> dict:
+    if suite is None:
+        return {}
+    return {
+        "statementCoveragePct": suite.statement_coverage_pct,
+        "branchCoveragePct": suite.branch_coverage_pct,
+        "mcdcCoveragePct": suite.mcdc_coverage_pct,
+        "coveredStatements": suite.covered_statements,
+        "totalStatements": suite.total_statements,
+        "coveredBranches": suite.covered_branches,
+        "totalBranches": suite.total_branches,
+        "coveredMcdcPairs": len(suite.covered_keys),
+        "totalMcdcPairs": suite.total_mcdc_conditions,
+        "iterationsUsed": suite.iteration_count,
+        "redundancyRate": suite.redundancy_rate,
+        "unvisitedMcdc": keys_to_camel(suite.unvisited_summary()),
+    }
 
 
 def _format_condition_trace(result: TestResult) -> str | None:

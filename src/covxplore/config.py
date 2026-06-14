@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_model: str = "deepseek/deepseek-reasoner"
+    llm_timeout_sec: int = 120
 
     # Generation loop
     max_iterations: int = 15

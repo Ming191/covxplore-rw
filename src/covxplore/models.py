@@ -24,6 +24,9 @@ class UnvisitedMcdc(BaseModel):
     condition: str
     true_branch_visited: bool
     false_branch_visited: bool
+    line_in_function: int | None = None
+    start_offset: int | None = None
+    end_offset: int | None = None
 
     def identity(self) -> int:
         if self.node_id is None:

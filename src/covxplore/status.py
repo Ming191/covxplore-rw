@@ -9,6 +9,7 @@ class TestStatus(str, Enum):
     FAILED = "FAILED"
     RUNTIME_ERROR = "RUNTIME_ERROR"
     COMPILE_ERROR = "COMPILE_ERROR"
+    INFRA_ERROR = "INFRA_ERROR"
     UNKNOWN = "UNKNOWN"
 
 
@@ -32,6 +33,9 @@ def normalize_test_status(raw_status: str | None) -> TestStatus:
     if token in {"compile error", "compilation error"}:
         return TestStatus.COMPILE_ERROR
 
+    if token in {"infra error", "infrastructure error", "api error", "backend error"}:
+        return TestStatus.INFRA_ERROR
+
     return TestStatus.UNKNOWN
 
 
@@ -42,4 +46,5 @@ def is_failure_status(status: str | TestStatus) -> bool:
         TestStatus.FAILED,
         TestStatus.RUNTIME_ERROR,
         TestStatus.COMPILE_ERROR,
+        TestStatus.INFRA_ERROR,
     }

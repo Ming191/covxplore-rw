@@ -3,6 +3,7 @@ from covxplore.tools.get_source import GetNodeSourceTool
 from covxplore.tools.search_nodes import SearchNodesTool
 from covxplore.tools.execute_testcase import (
     ExecuteTestcaseTool,
+    configure_run_hooks,
     get_shared_suite,
     set_current_run,
     reset_shared_suite,
@@ -15,6 +16,7 @@ __all__ = [
     "GetNodeSourceTool",
     "SearchNodesTool",
     "ExecuteTestcaseTool",
+    "configure_run_hooks",
     "GetConditionsStaticTool",
     "get_shared_suite",
     "set_current_run",

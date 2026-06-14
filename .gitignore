@@ -4,3 +4,10 @@ __pycache__/
 results
 .idea
 .venv
+.venv-win
+.uv-cache
+.pytest_cache
+.covxplore
+logs
+ui/node_modules
+ui/dist
