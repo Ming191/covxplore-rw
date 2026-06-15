@@ -71,22 +71,20 @@ def run_generation() -> None:
     )
     args = parser.parse_args()
 
-    from covxplore.ablation import AblationRunner
     from covxplore.config import get_settings
-    from covxplore.experiment import ExperimentConfig
+    from covxplore.generator import GenerationConfig, generate
 
     cfg = get_settings()
     variant = args.variant or cfg.default_prompt_variant
 
-    exp_cfg = ExperimentConfig(
+    exp_cfg = GenerationConfig(
         function_path=args.path,
         prompt_variant=variant,
         max_iterations=args.max_iter if args.max_iter is not None else cfg.max_iterations,
         mcdc_target=args.mcdc_target if args.mcdc_target is not None else cfg.mcdc_target,
     )
 
-    runner = AblationRunner()
-    result = runner.run_one(exp_cfg)
+    result = generate(exp_cfg)
 
     summary = result.to_summary_dict()
     out_dir = Path(args.out) if args.out else Path(".")

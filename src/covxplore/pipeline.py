@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 
 from covxplore.ablation import AblationRunner
-from covxplore.experiment import ExperimentResult
+from covxplore.experiment import flat_row
 
 _console = Console()
 
@@ -136,7 +136,7 @@ def _run_one_process(
 
     rows: list[dict] = []
     for r in results:
-        row = r.to_flat_row()
+        row = flat_row(r)
         row["function_name"] = _safe_name(r.config.function_path)
         rows.append(row)
     return rows

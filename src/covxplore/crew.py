@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any, cast
-
 from crewai import Agent, Crew, LLM, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, crew, task
@@ -87,7 +85,7 @@ def build_crew(
     prompt_config,  # PromptConfig
     *,
     max_iterations: int | None = None,
-) -> tuple["CovxploreCrew", object]:  # (crew_instance, builder)
+) -> tuple["CovxploreCrew", PromptBuilder]:
     builder = PromptBuilder(prompt_config)
 
     tools = [
@@ -96,7 +94,5 @@ def build_crew(
         SearchNodesTool(),
     ]
 
-    crew_inst: CovxploreCrew | None = None
-    crew_cls = cast(Any, CovxploreCrew)
-    crew_inst = crew_cls(tools=tools, max_iterations=max_iterations)
+    crew_inst = CovxploreCrew(tools=tools, max_iterations=max_iterations)
     return crew_inst, builder
