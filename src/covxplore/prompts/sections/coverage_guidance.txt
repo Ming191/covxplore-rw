@@ -3,8 +3,8 @@ COVERAGE GUIDANCE (injected dynamically each iteration):
 {coverage_gap}
 
 The suite coverage progress so far:
-  Statement : {stmt_progress}
-  Branch    : {branch_progress}
+  Statement : {stmt_pct}%
+  Branch    : {branch_pct}%
   MC/DC     : {mcdc_pct}% ({covered}/{total} pairs covered)
 Remaining budget: {remaining_iterations} iterations.
 
