@@ -1,6 +1,11 @@
 # Covxplore
 
-Covxplore is a multi-agent system for automated C/C++ test case generation, targeting improved MC/DC coverage. It leverages an iterative loop to perform ablation studies on prompts, identifying the most effective prompting techniques and components.
+Covxplore is a single-agent system for automated C/C++ test case generation,
+targeting improved MC/DC coverage. It drives the AkaUT REST API and runs an
+iterative generate-execute-refine loop until coverage targets are met.
+
+> Experimental tooling (prompt ablation matrix, parallel pipeline, run
+> logging) lives on the `playground` branch.
 
 ## Installation
 
@@ -20,7 +25,7 @@ Make sure the project dependencies are installed (e.g., via `uv sync` or `uv pip
 
 ## CLI Commands
 
-Covxplore provides the following main CLI entry points:
+Covxplore provides a single CLI entry point:
 
 ### `covxplore-gen`
 
@@ -40,24 +45,3 @@ covxplore-gen \
 - `--out`, `-o`: Directory to write the summary JSON. Defaults to current directory.
 - `--max-iter`: Override max iterations setting.
 - `--mcdc-target`: Override MC/DC target 0.0–1.0 setting.
-
-### `covxplore-ablate`
-
-Run the full ablation matrix (all or selected variants, N repeats).
-
-**Example:**
-```bash
-covxplore-ablate \
-    --path "/project/src/foo.cpp\MyNS::bar(int)" \
-    --variants full no_cot no_coverage baseline \
-    --repeat 3 \
-    --out results/
-```
-
-**Options:**
-- `--path`, `-p`: Absolute path of the function node. *(Required)*
-- `--variants`: Variant names to include. Defaults to all variants.
-- `--repeat`, `-r`: Number of times to repeat the evaluations.
-- `--out`, `-o`: Directory to write the results. Defaults to `results`.
-
-*Note: The legacy `crewai run`, `train`, `replay`, and `test` commands are deprecated and unsupported in Covxplore v0.2. Please use the CLI endpoints defined above.*
