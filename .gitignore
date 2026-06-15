@@ -4,3 +4,15 @@ __pycache__/
 results
 .idea
 .venv
+
+# Run outputs & experiment artifacts
+all_results/
+results_*/
+debugs_*/
+*.csv
+*.json
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
