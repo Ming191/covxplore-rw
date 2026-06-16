@@ -6,6 +6,7 @@ from crewai.project import CrewBase, agent, crew, task
 from crewai.tools import BaseTool
 
 from covxplore.config import get_settings
+from covxplore.llm import build_llm
 from covxplore.prompts import PromptBuilder
 from covxplore.tools import SearchNodesTool, GetNodeSourceTool, ExecuteTestcaseTool
 
@@ -45,14 +46,7 @@ class CovxploreCrew:
         if isinstance(llm, LLM):
             self._llm = llm
         else:
-            model = (llm or cfg.deepseek_model).strip()
-            model = model if "/" in model else f"deepseek/{model}"
-            self._llm = LLM(
-                model=model,
-                api_key=cfg.deepseek_api_key,
-                base_url=cfg.deepseek_base_url,
-                max_tokens=cfg.max_tokens,
-            )
+            self._llm = build_llm(llm)
 
     @agent
     def test_generator(self) -> Agent:

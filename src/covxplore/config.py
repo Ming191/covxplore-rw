@@ -17,11 +17,14 @@ class Settings(BaseSettings):
     # DeepSeek via LiteLLM
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model: str = "deepseek/deepseek-reasoner"
+    deepseek_model: str = "deepseek/deepseek-v4-pro"
 
     # Generation loop
     max_iterations: int = 15
     max_tokens: int = 4000
+
+    llm_empty_retries: int = 5  # extra attempts when a call returns empty
+    llm_retry_backoff_sec: float = 1.0  # base backoff, grows linearly per attempt
     mcdc_target: float = 1.0  # 1.0 = 100 % MC/DC coverage
     min_suite_size: int = 1  # keep at least this many tests even if redundant
     redundant_streak_limit: int = 3  # early-stop after N consecutive redundant tests

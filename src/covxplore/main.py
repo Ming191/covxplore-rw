@@ -1,30 +1,3 @@
-#!/usr/bin/env python
-"""covxplore CLI entry points.
-
-Commands
---------
-covxplore-gen
-    Run a single test generation for one function with one prompt variant.
-    Example:
-        covxplore-gen \\
-            --path "/project/src/foo.cpp\\MyNS::bar(int)" \\
-            --variant full \\
-            --out results/
-
-covxplore-ablate
-    Run the full ablation matrix (all or selected variants, N repeats).
-    Example:
-        covxplore-ablate \\
-            --path "/project/src/foo.cpp\\MyNS::bar(int)" \\
-            --variants full no_cot no_coverage baseline \\
-            --repeat 3 \\
-            --out results/
-        covxplore-ablate \\
-            --path "/project/src/foo.cpp\\MyNS::bar(int)" \\
-            --leave-one-out \\
-            --repeat 3 \\
-            --out results/
-"""
 from __future__ import annotations
 
 import argparse
@@ -35,7 +8,6 @@ from pathlib import Path
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
 from dotenv import load_dotenv
-import os
 
 load_dotenv()
 
