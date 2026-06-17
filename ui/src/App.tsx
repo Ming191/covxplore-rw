@@ -12,6 +12,7 @@ import {
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8765";
+const FUNCTION_PAGE_SIZE = 8;
 
 type Health = {
   akaut: {
@@ -314,6 +315,7 @@ export function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [query, setQuery] = useState("XMLElement::FindAttribute");
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
+  const [functionPage, setFunctionPage] = useState(1);
   const [selected, setSelected] = useState<NodeInfo | null>(null);
   const [detail, setDetail] = useState<FunctionDetail | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("source");
@@ -344,6 +346,15 @@ export function App() {
     [runs],
   );
   const visibleRun = activeRun ?? liveRun;
+  const functionPageCount = Math.max(1, Math.ceil(nodes.length / FUNCTION_PAGE_SIZE));
+  const pagedNodes = useMemo(
+    () => nodes.slice((functionPage - 1) * FUNCTION_PAGE_SIZE, functionPage * FUNCTION_PAGE_SIZE),
+    [functionPage, nodes],
+  );
+
+  useEffect(() => {
+    setFunctionPage((current) => Math.min(current, functionPageCount));
+  }, [functionPageCount]);
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -392,9 +403,11 @@ export function App() {
         method: "POST",
         body: JSON.stringify({ query, types: ["FUNCTION"] }),
       });
-      setNodes(result);
-      if (result[0]) {
-        await selectFunction(result[0]);
+      const functions = result.filter((node) => node.type === "FUNCTION");
+      setNodes(functions);
+      setFunctionPage(1);
+      if (functions[0]) {
+        await selectFunction(functions[0]);
       }
     } catch (exc) {
       setError(String(exc));
@@ -630,8 +643,13 @@ export function App() {
           </button>
         </form>
 
+        <div className="function-results-header">
+          <span>FUNCTION</span>
+          <small>{nodes.length} result{nodes.length === 1 ? "" : "s"}</small>
+        </div>
+
         <div className="node-list">
-          {nodes.map((node) => (
+          {pagedNodes.map((node) => (
             <button
               type="button"
               key={`${node.absolutePath}-${node.line}`}
@@ -643,6 +661,28 @@ export function App() {
             </button>
           ))}
         </div>
+
+        {nodes.length > FUNCTION_PAGE_SIZE && (
+          <div className="pagination" aria-label="Function results pages">
+            <button
+              type="button"
+              disabled={functionPage === 1}
+              onClick={() => setFunctionPage((current) => Math.max(1, current - 1))}
+            >
+              Prev
+            </button>
+            <span>
+              Page {functionPage} / {functionPageCount}
+            </span>
+            <button
+              type="button"
+              disabled={functionPage === functionPageCount}
+              onClick={() => setFunctionPage((current) => Math.min(functionPageCount, current + 1))}
+            >
+              Next
+            </button>
+          </div>
+        )}
       </aside>
 
       <main className="workspace">

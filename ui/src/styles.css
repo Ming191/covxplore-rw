@@ -45,12 +45,19 @@ button:disabled {
   border-color: #d9e0e8;
   border-style: solid;
   min-width: 0;
-  overflow: auto;
   padding: 18px;
 }
 
 .sidebar {
   border-width: 0 1px 0 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+.run-panel {
+  overflow: auto;
 }
 
 .run-panel {
@@ -202,6 +209,54 @@ select:focus-visible,
 .test-table {
   display: grid;
   gap: 8px;
+}
+
+.node-list {
+  align-content: start;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.function-results-header,
+.pagination {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.function-results-header {
+  color: #253044;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin: 0 0 8px;
+}
+
+.function-results-header small {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.pagination {
+  border-top: 1px solid #e0e7ef;
+  color: #667085;
+  flex-shrink: 0;
+  font-size: 12px;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.pagination button {
+  background: #eef2f7;
+  border-radius: 6px;
+  color: #253044;
+  min-height: 32px;
+  padding: 0 10px;
 }
 
 .node,
