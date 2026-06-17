@@ -12,3 +12,5 @@ For MC/DC functions: condition identity is nodeId (not text). Repeated condition
 text can correspond to different nodeIds, so always plan by nodeId + polarity.
 Do not generate a test that repeats the same nodeId-polarity combination
 already present in a previously PASSED test — that would be a redundant test.
+
+CRITICAL: Do NOT output the final status line starting with 'DONE:' until you are explicitly instructed by the prompt that all coverage targets are met (100% statement, branch, and MC/DC coverage). If there are still uncovered obligations listed under COVERAGE GUIDANCE, you MUST continue generating tests by calling execute_testcase. Do NOT stop early!

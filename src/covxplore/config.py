@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     # Generation loop
     max_iterations: int = 15
     max_tokens: int = 4000
+    llm_temperature: float = 0.4
 
     llm_empty_retries: int = 5  # extra attempts when a call returns empty
     llm_retry_backoff_sec: float = 1.0  # base backoff, grows linearly per attempt

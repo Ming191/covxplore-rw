@@ -35,7 +35,24 @@ class RetryingLLM(LLM):
         attempts = self._empty_retries + 1
         result: Any = None
         for attempt in range(1, attempts + 1):
-            result = super().call(*args, **kwargs)
+            try:
+                result = super().call(*args, **kwargs)
+            except Exception as exc:
+                exc_name = type(exc).__name__
+                is_unavailable = (
+                    "ServiceUnavailable" in exc_name
+                    or "503" in str(exc)
+                    or "service_unavailable" in str(exc).lower()
+                )
+                if is_unavailable and attempt < attempts:
+                    backoff = max(30.0, self._retry_backoff_sec * attempt * 10)
+                    _console.print(
+                        f"[yellow]DeepSeek 503 unavailable "
+                        f"(attempt {attempt}/{attempts}); retrying in {backoff:.0f}s[/]"
+                    )
+                    time.sleep(backoff)
+                    continue
+                raise
             if not _is_empty(result):
                 return result
             if attempt < attempts:
@@ -53,6 +70,7 @@ class RetryingLLM(LLM):
         return result
 
 
+
 def build_llm(model: str | None = None) -> RetryingLLM:
     cfg = get_settings()
     resolved = (model or cfg.deepseek_model).strip()
@@ -62,6 +80,7 @@ def build_llm(model: str | None = None) -> RetryingLLM:
         api_key=cfg.deepseek_api_key,
         base_url=cfg.deepseek_base_url,
         max_tokens=cfg.max_tokens,
+        temperature=cfg.llm_temperature,
         empty_retries=cfg.llm_empty_retries,
         retry_backoff_sec=cfg.llm_retry_backoff_sec,
     )
