@@ -24,11 +24,7 @@ from covxplore.models import TestSuite
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.prompts.registry import get_variant
 from covxplore.status import TestStatus
-from covxplore.tools.execute_testcase import (
-    cleanup_suite,
-    get_shared_suite,
-    reset_shared_suite,
-)
+from covxplore.tools.execute_testcase import RunContext
 
 _console = Console()
 
@@ -191,8 +187,11 @@ def generate(config: GenerationConfig) -> GenerationResult:
         f"[bold cyan]Run {config.run_id} | variant={config.prompt_variant!r}"
     )
 
+    # Create a per-run context (replaces module-global _suites/_current_run_id)
+    run_context = RunContext()
+
     # Reset the shared suite for this run
-    suite: TestSuite = reset_shared_suite(config.function_path, config.run_id)
+    suite: TestSuite = run_context.reset_shared_suite(config.function_path, config.run_id)
     _prefetch_conditions(suite)
 
     if suite.total_mcdc_conditions == 0:
@@ -215,6 +214,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
         crew_inst, builder = build_crew(
             prompt_config=prompt_config,
             max_iterations=config.max_iterations,
+            run_context=run_context,
         )
         assert isinstance(builder, PromptBuilder)
         inputs = {
@@ -252,7 +252,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
                 tracing_url = getattr(crew_inst.crew(), "_telemetry_url", None)
             except Exception:
                 pass
-        final_suite = get_shared_suite() or suite
+        final_suite = run_context.get_shared_suite() or suite
         _reconcile_tokens(crew_inst, final_suite)
 
     # We must deduce early stops manually based on the final achieved coverage
@@ -285,7 +285,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
     )
 
     _print_result_summary(result)
-    cleanup_suite(config.run_id)
+    run_context.cleanup_suite(config.run_id)
     return result
 
 

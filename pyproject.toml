@@ -29,3 +29,10 @@ packages = ["src/covxplore"]
 
 [tool.crewai]
 type = "crew"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = [
+    "ignore::pytest.PytestCollectionWarning",
+]

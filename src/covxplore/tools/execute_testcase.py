@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import time
+from dataclasses import dataclass, field
+
 from crewai.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
 from covxplore.api_client import AkaUTClient, AkaUTError, ExecuteResult
 from covxplore.config import get_settings
@@ -19,35 +22,41 @@ from covxplore.models import (
 from covxplore.status import TestStatus, is_failure_status
 
 
-class FatalToolError(BaseException):
+logger = logging.getLogger(__name__)
+
+
+class FatalToolError(Exception):
     pass
 
 
-_suites: dict[str, TestSuite] = {}
-_current_run_id: str | None = None
+@dataclass
+class RunContext:
+    """Owns suites dict + current_run_id for one generation run.
 
+    Assumes one active run per context; cleanup resets stale active-run state.
+    """
 
-def get_shared_suite() -> TestSuite | None:
-    if _current_run_id is None:
-        return None
-    return _suites.get(_current_run_id)
+    _suites: dict[str, TestSuite] = field(default_factory=dict)
+    _current_run_id: str | None = field(default=None, init=False)
 
+    def get_shared_suite(self) -> TestSuite | None:
+        if self._current_run_id is None:
+            return None
+        return self._suites.get(self._current_run_id)
 
-def set_current_run(run_id: str) -> None:
-    global _current_run_id
-    _current_run_id = run_id
+    def set_current_run(self, run_id: str) -> None:
+        self._current_run_id = run_id
 
+    def reset_shared_suite(self, function_path: str, run_id: str) -> TestSuite:
+        self._current_run_id = run_id
+        suite = TestSuite(function_path=function_path)
+        self._suites[run_id] = suite
+        return suite
 
-def reset_shared_suite(function_path: str, run_id: str) -> TestSuite:
-    global _current_run_id
-    _current_run_id = run_id
-    suite = TestSuite(function_path=function_path)
-    _suites[run_id] = suite
-    return suite
-
-
-def cleanup_suite(run_id: str) -> None:
-    _suites.pop(run_id, None)
+    def cleanup_suite(self, run_id: str) -> None:
+        self._suites.pop(run_id, None)
+        if self._current_run_id == run_id:
+            self._current_run_id = None
 
 
 class _Input(BaseModel):
@@ -83,6 +92,13 @@ class ExecuteTestcaseTool(BaseTool):
     )
     args_schema: type[BaseModel] = _Input
 
+    _run_context: RunContext = PrivateAttr(default_factory=RunContext)
+
+    def __init__(self, run_context: RunContext | None = None, **data):
+        super().__init__(**data)
+        if run_context is not None:
+            object.__setattr__(self, "_run_context", run_context)
+
     def _run(
         self,
         absolute_path: str,
@@ -90,7 +106,7 @@ class ExecuteTestcaseTool(BaseTool):
         test_name: str | None = None,
     ) -> str:
         cfg = get_settings()
-        suite = get_shared_suite()
+        suite = self._run_context.get_shared_suite()
 
         t0 = time.monotonic()
         try:
@@ -100,19 +116,25 @@ class ExecuteTestcaseTool(BaseTool):
                 )
         except AkaUTError as exc:
             elapsed = (time.monotonic() - t0) * 1000
-            failed = TestResult(
-                test_name=test_name or "unknown",
-                test_body=test_body,
-                status=TestStatus.COMPILE_ERROR.value,
-                execute_log=str(exc),
-                elapsed_ms=elapsed,
-            )
-            if suite:
-                suite.add_result(failed, cfg.min_suite_size)
+            if _is_compile_or_test_body_error(exc):
+                failed = TestResult(
+                    test_name=test_name or "unknown",
+                    test_body=test_body,
+                    status=TestStatus.COMPILE_ERROR.value,
+                    execute_log=str(exc),
+                    elapsed_ms=elapsed,
+                )
+                if suite:
+                    suite.add_result(failed, cfg.min_suite_size)
+                return (
+                    f"[COMPILE_ERROR] execute_testcase failed: {exc}\n"
+                    "Review the test body for syntax errors, missing includes, or "
+                    "incorrect variable types and try again."
+                )
             return (
-                f"[COMPILE_ERROR] execute_testcase failed: {exc}\n"
-                "Review the test body for syntax errors, missing includes, or "
-                "incorrect variable types and try again."
+                f"[EXECUTE_ERROR] execute_testcase API/server error: {exc}\n"
+                "AkaUT did not return a confirmed compile/test-body failure. "
+                "Check server health, network/API response, and backend logs before changing the test body."
             )
 
         elapsed = (time.monotonic() - t0) * 1000
@@ -181,15 +203,41 @@ class ExecuteTestcaseTool(BaseTool):
                 )
                 for e in raw.condition_trace
             ],
-            trace_summary=TraceSummary(**raw.trace_summary)
-            if raw.trace_summary
-            else None,
+            trace_summary=_parse_trace_summary(raw.trace_summary),
         )
 
         if suite:
             suite.add_result(result, cfg.min_suite_size)
 
         return _format_summary(result, suite)
+
+
+def _is_compile_or_test_body_error(exc: AkaUTError) -> bool:
+    message = str(exc).lower()
+    compile_markers = (
+        "compile",
+        "compilation",
+        "syntax error",
+        "test body",
+        "testbody",
+        "missing include",
+        "incorrect variable type",
+    )
+    return any(marker in message for marker in compile_markers)
+
+
+def _parse_trace_summary(raw: dict | None) -> TraceSummary | None:
+    if not raw:
+        return None
+    try:
+        return TraceSummary(**raw)
+    except (TypeError, ValidationError) as exc:
+        logger.debug("Ignoring invalid traceSummary payload: %s", exc)
+        return None
+
+
+def _sort_value(value: object) -> tuple[bool, str]:
+    return value is None, str(value)
 
 
 def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
@@ -241,10 +289,8 @@ def _format_condition_trace(result: TestResult) -> str | None:
     sorted_trace = sorted(
         result.condition_trace,
         key=lambda e: (
-            e.node_id is None,
-            e.node_id if e.node_id is not None else float("inf"),
-            e.line_in_function is None,
-            e.line_in_function if e.line_in_function is not None else float("inf"),
+            *_sort_value(e.node_id),
+            *_sort_value(e.line_in_function),
             e.condition,
         ),
     )
