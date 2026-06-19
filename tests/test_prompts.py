@@ -3,6 +3,7 @@
 import pytest
 
 from covxplore.prompts.config import PromptConfig
+from covxplore.prompts.builder import PromptBuilder
 from covxplore.prompts.registry import (
     VARIANTS,
     get_leave_one_out_variants,
@@ -152,3 +153,26 @@ class TestGetLeaveOneOutVariants:
         # refs come first
         assert variants[0] == "full"
         assert variants[1] == "full_shots"
+
+
+class TestPromptBuilderTaskDescription:
+    def test_task_description_includes_run_id_instruction(self):
+        builder = PromptBuilder(
+            PromptConfig(
+                "minimal",
+                role_persona=False,
+                cot_reasoning=False,
+                coverage_guidance=False,
+                self_reflection=False,
+                few_shot_examples=False,
+                output_format=False,
+            )
+        )
+
+        text = builder.task_description(
+            function_path="/x.cpp::f()",
+            run_id="run-123",
+        )
+
+        assert "Run id for this generation run: run-123" in text
+        assert "Every execute_testcase call MUST include this exact run_id value." in text

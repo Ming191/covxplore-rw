@@ -187,11 +187,10 @@ def generate(config: GenerationConfig) -> GenerationResult:
         f"[bold cyan]Run {config.run_id} | variant={config.prompt_variant!r}"
     )
 
-    # Create a per-run context (replaces module-global _suites/_current_run_id)
+    # Create a per-run context for explicit run_id-keyed suite state.
     run_context = RunContext()
 
-    # Reset the shared suite for this run
-    suite: TestSuite = run_context.reset_shared_suite(config.function_path, config.run_id)
+    suite: TestSuite = run_context.reset_suite(config.function_path, config.run_id)
     _prefetch_conditions(suite)
 
     if suite.total_mcdc_conditions == 0:
@@ -221,6 +220,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
             "agent_backstory": builder.system_prompt(),
             "task_description": builder.task_description(
                 function_path=config.function_path,
+                run_id=config.run_id,
                 suite=suite,
                 remaining_iterations=config.max_iterations,
                 static_conditions_text=static_conditions_text,
@@ -252,7 +252,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
                 tracing_url = getattr(crew_inst.crew(), "_telemetry_url", None)
             except Exception:
                 pass
-        final_suite = run_context.get_shared_suite() or suite
+        final_suite = run_context.get_suite(config.run_id) or suite
         _reconcile_tokens(crew_inst, final_suite)
 
     # We must deduce early stops manually based on the final achieved coverage

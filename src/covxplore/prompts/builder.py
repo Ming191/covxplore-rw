@@ -34,6 +34,7 @@ class PromptBuilder:
         system_prompt = builder.system_prompt()
         task_desc = builder.task_description(
             function_path=...,
+            run_id=...,
             suite=...,
             remaining_iterations=...)
     """
@@ -58,6 +59,7 @@ class PromptBuilder:
     def task_description(
         self,
         function_path: str,
+        run_id: str,
         suite=None,  # TestSuite | None
         remaining_iterations: int = 0,
         static_conditions_text: str | None = None,
@@ -76,6 +78,8 @@ class PromptBuilder:
         parts: list[str] = [
             f"Generate test cases to maximise {coverage_target} for the function at:\n"
             f"  {function_path}\n\n"
+            f"Run id for this generation run: {run_id}\n"
+            "Every execute_testcase call MUST include this exact run_id value.\n\n"
             "Workflow:\n"
             "Use the preloaded static data below as ground truth (conditions, context, source).\n"
             "If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol.\n"

@@ -1,0 +1,219 @@
+"""Tests for RunContext and ExecuteTestcaseTool custom context — pure, no network."""
+
+from covxplore.api_client import AkaUTError, ExecuteResult
+from covxplore.models import ConditionTraceEntry, TestResult, TestSuite
+from covxplore.status import TestStatus
+from covxplore.tools.execute_testcase import (
+    RunContext,
+    ExecuteTestcaseTool,
+    _format_condition_trace,
+)
+
+
+class TestRunContext:
+    def test_reset_suite_creates_suite_by_run_id(self):
+        ctx = RunContext()
+        suite = ctx.reset_suite("/f.cpp::foo()", "run-A")
+
+        assert isinstance(suite, TestSuite)
+        assert suite.function_path == "/f.cpp::foo()"
+        assert ctx._suites["run-A"] is suite
+        assert ctx.get_suite("run-A") is suite
+
+    def test_cleanup_suite_removes_only_requested_run(self):
+        ctx = RunContext()
+        ctx.reset_suite("/a.cpp::f()", "run-1")
+        ctx.reset_suite("/b.cpp::g()", "run-2")
+
+        ctx.cleanup_suite("run-1")
+
+        assert "run-1" not in ctx._suites
+        assert "run-2" in ctx._suites
+
+    def test_cleanup_nonexistent_run_no_error(self):
+        ctx = RunContext()
+        ctx.cleanup_suite("nope")  # should not raise
+
+    def test_get_suite_returns_suite_by_explicit_run_id(self):
+        ctx = RunContext()
+        suite = ctx.reset_suite("/f.cpp::foo()", "run-X")
+
+        assert ctx.get_suite("run-X") is suite
+        assert ctx.get_suite("missing") is None
+
+    def test_isolation_between_contexts(self):
+        ctx1 = RunContext()
+        ctx2 = RunContext()
+        suite1 = ctx1.reset_suite("/f1.cpp::f()", "r1")
+        suite2 = ctx2.reset_suite("/f2.cpp::g()", "r2")
+
+        assert ctx1.get_suite("r1") is suite1
+        assert ctx2.get_suite("r2") is suite2
+        assert ctx1.get_suite("r2") is None
+        assert ctx2.get_suite("r1") is None
+        assert suite1.function_path == "/f1.cpp::f()"
+        assert suite2.function_path == "/f2.cpp::g()"
+
+
+class TestExecuteTestcaseToolCustomContext:
+    def test_default_run_context_factory(self):
+        tool = ExecuteTestcaseTool()
+        assert isinstance(tool._run_context, RunContext)
+        assert tool._run_context.get_suite("missing") is None
+
+    def test_custom_run_context_passed(self):
+        ctx = RunContext()
+        suite = ctx.reset_suite("/test.cpp::f()", "custom-r")
+        tool = ExecuteTestcaseTool(run_context=ctx)
+        assert tool._run_context is ctx
+        assert tool._run_context.get_suite("custom-r") is suite
+        assert suite.function_path == "/test.cpp::f()"
+
+    def test_run_context_isolation(self):
+        ctx1 = RunContext()
+        suite1 = ctx1.reset_suite("/a.cpp::a()", "r1")
+        ctx2 = RunContext()
+        suite2 = ctx2.reset_suite("/b.cpp::b()", "r2")
+
+        tool1 = ExecuteTestcaseTool(run_context=ctx1)
+        tool2 = ExecuteTestcaseTool(run_context=ctx2)
+
+        assert tool1._run_context.get_suite("r1") is suite1
+        assert tool2._run_context.get_suite("r2") is suite2
+        assert suite1.function_path == "/a.cpp::a()"
+        assert suite2.function_path == "/b.cpp::b()"
+
+
+class _FakeClient:
+    response: ExecuteResult | None = None
+    error: AkaUTError | None = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+    def execute_testcase(self, *_args, **_kwargs):
+        if self.error is not None:
+            raise self.error
+        assert self.response is not None
+        return self.response
+
+
+class TestExecuteTestcaseToolRobustResponses:
+    def test_coverage_none_does_not_crash(self, monkeypatch):
+        raw = {
+            "testName": "t1",
+            "status": "PASSED",
+            "statementCoverage": None,
+            "branchCoverage": None,
+            "mcdcCoverage": None,
+        }
+        _FakeClient.response = ExecuteResult(raw=raw)
+        _FakeClient.error = None
+        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+
+        output = ExecuteTestcaseTool(run_context=RunContext())._run("run-1", "/x.cpp::f()", "f();", "t1")
+
+        assert "Stmt: 0/0 (0%)" in output
+        assert "Branch: 0/0 (0%)" in output
+        assert "MC/DC: 0/0 (0%)" in output
+
+    def test_none_trace_and_unvisited_lists_do_not_crash(self, monkeypatch):
+        raw = {
+            "testName": "t1",
+            "status": "PASSED",
+            "unvisitedMcdcConditions": None,
+            "unvisitedStatements": None,
+            "unvisitedBranches": None,
+            "conditionTrace": None,
+        }
+        _FakeClient.response = ExecuteResult(raw=raw)
+        _FakeClient.error = None
+        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+
+        output = ExecuteTestcaseTool(run_context=RunContext())._run("run-1", "/x.cpp::f()", "f();", "t1")
+
+        assert "===  t1 | PASSED" in output
+
+    def test_invalid_trace_summary_does_not_crash(self, monkeypatch):
+        raw = {
+            "testName": "t1",
+            "status": "PASSED",
+            "traceSummary": {"visited_functions": [object()]},
+        }
+        _FakeClient.response = ExecuteResult(raw=raw)
+        _FakeClient.error = None
+        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+
+        output = ExecuteTestcaseTool(run_context=RunContext())._run("run-1", "/x.cpp::f()", "f();", "t1")
+
+        assert "===  t1 | PASSED" in output
+
+    def test_unknown_akaut_error_is_execute_error_and_not_suite_result(self, monkeypatch):
+        ctx = RunContext()
+        suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+        _FakeClient.response = None
+        _FakeClient.error = AkaUTError("POST http://localhost/api/testcase/execute failed: boom")
+        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+
+        output = ExecuteTestcaseTool(run_context=ctx)._run("run-1", "/x.cpp::f()", "f();", "t1")
+
+        assert "[EXECUTE_ERROR]" in output
+        assert "COMPILE_ERROR" not in output
+        assert suite.tests == []
+
+    def test_tool_uses_explicit_run_id_for_suite_lookup(self, monkeypatch):
+        ctx = RunContext()
+        suite_a = ctx.reset_suite("/a.cpp::f()", "run-A")
+        suite_b = ctx.reset_suite("/b.cpp::g()", "run-B")
+        _FakeClient.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
+        _FakeClient.error = None
+        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+
+        output = ExecuteTestcaseTool(run_context=ctx)._run("run-A", "/a.cpp::f()", "f();", "t1")
+
+        assert "Suite best" in output
+        assert len(suite_a.tests) == 1
+        assert suite_b.tests == []
+
+    def test_unknown_run_id_executes_without_suite_mutation(self, monkeypatch):
+        ctx = RunContext()
+        suite = ctx.reset_suite("/known.cpp::f()", "known-run")
+        _FakeClient.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
+        _FakeClient.error = None
+        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+
+        output = ExecuteTestcaseTool(run_context=ctx)._run("unknown-run", "/x.cpp::f()", "f();", "t1")
+
+        assert "===  t1 | PASSED" in output
+        assert "Suite best" not in output
+        assert suite.tests == []
+
+
+def test_format_condition_trace_sorts_mixed_node_ids_without_crashing():
+    result = TestResult(
+        test_name="t1",
+        test_body="f();",
+        status=TestStatus.PASSED.value,
+        condition_trace=[
+            ConditionTraceEntry.model_construct(node_id="b", condition="b", true_branch_visited=True, false_branch_visited=False, line_in_function=None),
+            ConditionTraceEntry.model_construct(node_id=1, condition="a", true_branch_visited=False, false_branch_visited=True, line_in_function=None),
+            ConditionTraceEntry.model_construct(node_id=None, condition="c", true_branch_visited=True, false_branch_visited=True, line_in_function=None),
+        ],
+    )
+
+    output = _format_condition_trace(result)
+
+    assert output is not None
+    assert "[node:1 line+?] 'a' TRUE=NO FALSE=YES" in output
+    assert "[node:b line+?] 'b' TRUE=YES FALSE=NO" in output
+    assert "[node:? line+?] 'c' TRUE=YES FALSE=YES" in output
+
+
+def test_fatal_tool_error_is_normal_exception():
+    from covxplore.tools.execute_testcase import FatalToolError
+
+    assert issubclass(FatalToolError, Exception)
+    assert not issubclass(FatalToolError, BaseException) or issubclass(FatalToolError, Exception)

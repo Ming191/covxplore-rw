@@ -31,35 +31,30 @@ class FatalToolError(Exception):
 
 @dataclass
 class RunContext:
-    """Owns suites dict + current_run_id for one generation run.
-
-    Assumes one active run per context; cleanup resets stale active-run state.
-    """
+    """Owns suites by explicit generation run id."""
 
     _suites: dict[str, TestSuite] = field(default_factory=dict)
-    _current_run_id: str | None = field(default=None, init=False)
 
-    def get_shared_suite(self) -> TestSuite | None:
-        if self._current_run_id is None:
-            return None
-        return self._suites.get(self._current_run_id)
+    def get_suite(self, run_id: str) -> TestSuite | None:
+        return self._suites.get(run_id)
 
-    def set_current_run(self, run_id: str) -> None:
-        self._current_run_id = run_id
-
-    def reset_shared_suite(self, function_path: str, run_id: str) -> TestSuite:
-        self._current_run_id = run_id
+    def reset_suite(self, function_path: str, run_id: str) -> TestSuite:
         suite = TestSuite(function_path=function_path)
         self._suites[run_id] = suite
         return suite
 
     def cleanup_suite(self, run_id: str) -> None:
         self._suites.pop(run_id, None)
-        if self._current_run_id == run_id:
-            self._current_run_id = None
 
 
 class _Input(BaseModel):
+    run_id: str = Field(
+        ...,
+        description=(
+            "Opaque generation run id provided in the task instructions. "
+            "Pass it unchanged on every execute_testcase call."
+        ),
+    )
     absolute_path: str = Field(
         ...,
         description=(
@@ -101,12 +96,13 @@ class ExecuteTestcaseTool(BaseTool):
 
     def _run(
         self,
+        run_id: str,
         absolute_path: str,
         test_body: str,
         test_name: str | None = None,
     ) -> str:
         cfg = get_settings()
-        suite = self._run_context.get_shared_suite()
+        suite = self._run_context.get_suite(run_id)
 
         t0 = time.monotonic()
         try:
