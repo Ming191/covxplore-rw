@@ -1,10 +1,3 @@
-"""Experiment-layer helpers for the ablation study.
-
-The generation engine and its result type now live in
-:mod:`covxplore.generator`. This module only adds the CSV/flat-row projection
-used by ablation and pipeline reporting.
-"""
-
 from __future__ import annotations
 
 from covxplore.generator import GenerationConfig, GenerationResult, StopReason
@@ -21,20 +14,21 @@ __all__ = [
 def flat_row(result: GenerationResult) -> dict:
     """One-row dict for CSV / DataFrame export."""
     suite = result.suite
+    metrics = suite.coverage.metrics(suite.tests)
     return {
         "run_id": result.config.run_id,
         "function_path": result.config.function_path,
         "prompt_variant": result.config.prompt_variant,
         "stop_reason": result.stop_reason,
-        "statement_coverage_pct": round(suite.statement_coverage_pct, 4),
-        "branch_coverage_pct": round(suite.branch_coverage_pct, 4),
+        "statement_coverage_pct": round(metrics.statement_pct, 4),
+        "branch_coverage_pct": round(metrics.branch_pct, 4),
         "mcdc_coverage_pct": result.final_mcdc_pct,
         "covered_statements": result.covered_statements,
-        "total_statements": suite.total_statements,
+        "total_statements": metrics.total_statements,
         "covered_branches": result.covered_branches,
-        "total_branches": suite.total_branches,
-        "covered_mcdc_pairs": len(suite.covered_keys),
-        "total_mcdc_pairs": suite.total_mcdc_conditions,
+        "total_branches": metrics.total_branches,
+        "covered_mcdc_pairs": metrics.covered_mcdc_pairs,
+        "total_mcdc_pairs": metrics.total_mcdc_pairs,
         "redundancy_rate": result.redundancy_rate,
         "total_input_tokens": result.total_input_tokens,
         "total_output_tokens": result.total_output_tokens,

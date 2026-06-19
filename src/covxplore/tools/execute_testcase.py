@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
 from covxplore.api_client import AkaUTClient, AkaUTError, ExecuteResult
 from covxplore.config import get_settings
-from covxplore.models import (
+from covxplore.types import (
     ConditionTraceEntry,
     CoverageDetail,
     TestResult,
@@ -19,6 +19,7 @@ from covxplore.models import (
     UnvisitedMcdc,
     UnvisitedStatement,
 )
+from covxplore.coverage.gap_analyzer import GapAnalyzer
 from covxplore.status import TestStatus, is_failure_status
 
 
@@ -249,16 +250,19 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
         f"MC/DC: {m.visited}/{m.total} ({m.progress * 100:.0f}%) +{result.new_mcdc_pairs_covered} new pairs"
     )
     if suite:
+        metrics = suite.coverage.metrics(suite.tests)
         lines.append(
-            f"Suite best → Stmt: {suite.statement_coverage_pct * 100:.0f}% | "
-            f"Branch: {suite.branch_coverage_pct * 100:.0f}% | "
-            f"MC/DC: {len(suite.covered_keys)}/{suite.total_mcdc_conditions} "
-            f"({suite.mcdc_coverage_pct * 100:.0f}%) | "
+            f"Suite best → Stmt: {metrics.statement_pct * 100:.0f}% | "
+            f"Branch: {metrics.branch_pct * 100:.0f}% | "
+            f"MC/DC: {metrics.covered_mcdc_pairs}/{metrics.total_mcdc_pairs} "
+            f"({metrics.mcdc_pct * 100:.0f}%) | "
             f"iter={suite.iteration_count} | "
             f"redundancy={suite.redundancy_rate * 100:.0f}%"
         )
         try:
-            gap = suite.coverage_gap_prompt_fragment()
+            gap = GapAnalyzer().analyze(
+                suite.coverage.gap_input(suite.tests, suite.iteration_count)
+            ).text
         except RuntimeError as exc:
             raise FatalToolError(str(exc)) from exc
         lines.append("")

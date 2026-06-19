@@ -20,11 +20,11 @@ from rich.console import Console
 from covxplore.config import get_settings
 from covxplore.crew import build_crew
 from covxplore.llm_logger import LLMInteractionLogger
-from covxplore.models import TestSuite
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.prompts.registry import get_variant
 from covxplore.status import TestStatus
 from covxplore.tools.execute_testcase import RunContext
+from covxplore.types import TestSuite
 
 _console = Console()
 
@@ -91,7 +91,7 @@ class GenerationResult:
 
     @property
     def final_mcdc_pct(self) -> float:
-        return round(self.suite.mcdc_coverage_pct, 4)
+        return round(self.suite.coverage.metrics(self.suite.tests).mcdc_pct, 4)
 
     @property
     def redundancy_rate(self) -> float:
@@ -119,11 +119,11 @@ class GenerationResult:
 
     @property
     def covered_statements(self) -> int:
-        return self.suite.covered_statements
+        return self.suite.coverage.metrics(self.suite.tests).covered_statements
 
     @property
     def covered_branches(self) -> int:
-        return self.suite.covered_branches
+        return self.suite.coverage.metrics(self.suite.tests).covered_branches
 
     # ------------------------------------------------------------------ #
     # Serialisation                                                       #
@@ -131,6 +131,7 @@ class GenerationResult:
 
     def to_summary_dict(self) -> dict:
         """Canonical summary JSON shape."""
+        metrics = self.suite.coverage.metrics(self.suite.tests)
         return {
             "run_id": self.config.run_id,
             "function_path": self.config.function_path,
@@ -138,15 +139,15 @@ class GenerationResult:
             "stop_reason": self.stop_reason,
             "error": self.error_message,
             "metrics": {
-                "statement_coverage_pct": round(self.suite.statement_coverage_pct, 4),
-                "branch_coverage_pct": round(self.suite.branch_coverage_pct, 4),
+                "statement_coverage_pct": round(metrics.statement_pct, 4),
+                "branch_coverage_pct": round(metrics.branch_pct, 4),
                 "mcdc_coverage_pct": self.final_mcdc_pct,
                 "covered_statements": self.covered_statements,
-                "total_statements": self.suite.total_statements,
+                "total_statements": metrics.total_statements,
                 "covered_branches": self.covered_branches,
-                "total_branches": self.suite.total_branches,
-                "covered_mcdc_pairs": len(self.suite.covered_keys),
-                "total_mcdc_pairs": self.suite.total_mcdc_conditions,
+                "total_branches": metrics.total_branches,
+                "covered_mcdc_pairs": metrics.covered_mcdc_pairs,
+                "total_mcdc_pairs": metrics.total_mcdc_pairs,
                 "redundancy_rate": self.redundancy_rate,
                 "total_input_tokens": self.total_input_tokens,
                 "total_output_tokens": self.total_output_tokens,
@@ -193,7 +194,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
     suite: TestSuite = run_context.reset_suite(config.function_path, config.run_id)
     _prefetch_conditions(suite)
 
-    if suite.total_mcdc_conditions == 0:
+    if not suite.coverage.has_mcdc:
         _console.print(
             "[yellow]No MC/DC conditions found — running for statement/branch coverage.[/]"
         )
@@ -262,7 +263,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
         _console.print(
             f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]"
         )
-    elif final_suite.consecutive_redundant >= config.redundant_streak_limit:
+    elif final_suite.coverage.consecutive_redundant >= config.redundant_streak_limit:
         stop_reason = "redundant_streak"
         error_msg = None
         _console.print(
@@ -293,26 +294,27 @@ def _coverage_target_reached(suite: TestSuite, config: GenerationConfig) -> bool
     """Return True when all applicable coverage targets are satisfied."""
     if suite.iteration_count == 0:
         return False
+    metrics = suite.coverage.metrics(suite.tests)
     mcdc_done = (
-        suite.total_mcdc_conditions == 0
-        or suite.mcdc_coverage_pct >= config.mcdc_target
-        or not suite.unvisited_summary()
+        metrics.total_mcdc_pairs == 0
+        or metrics.mcdc_pct >= config.mcdc_target
+        or not suite.coverage.unvisited_summary()
     )
     stmt_done = (
-        suite.total_statements == 0
-        or suite.covered_statements >= suite.total_statements
+        metrics.total_statements == 0
+        or metrics.covered_statements >= metrics.total_statements
     )
     branch_done = (
-        suite.total_branches == 0 or suite.covered_branches >= suite.total_branches
+        metrics.total_branches == 0 or metrics.covered_branches >= metrics.total_branches
     )
     return mcdc_done and stmt_done and branch_done
 
 
 def _prefetch_conditions(suite: TestSuite) -> None:
-    """Call /api/node/conditions before kickoff to pre-populate total_mcdc_conditions.
+    """Call /api/node/conditions before kickoff to pre-populate total_mcdc_pairs.
 
     This ensures stop-reason deduction is correct even when all generated tests
-    fail to compile (otherwise total_mcdc_conditions stays 0 and the run is
+    fail to compile (otherwise total_mcdc_pairs stays 0 and the run is
     falsely marked as coverage_target).
     """
     from covxplore.api_client import AkaUTClient, AkaUTError
@@ -321,17 +323,7 @@ def _prefetch_conditions(suite: TestSuite) -> None:
         with AkaUTClient() as client:
             result = client.get_node_conditions(suite.function_path)
         if result.total_mcdc_pairs > 0:
-            suite.total_mcdc_conditions = result.total_mcdc_pairs
-            suite.all_conditions = [c.condition for c in result.conditions]
-            for c in result.conditions:
-                if c.node_id is None:
-                    raise RuntimeError(
-                        "Backend payload missing nodeId in /api/node/conditions. "
-                        "nodeId is required for MC/DC identity."
-                    )
-                cid = c.node_id
-                suite.condition_id_to_text[cid] = c.condition
-                suite.condition_id_to_line[cid] = c.line_in_function
+            suite.coverage.seed_conditions(result.conditions, result.total_mcdc_pairs)
             _console.print(
                 f"[dim]Static CFG: {result.total_conditions} conditions "
                 f"({result.total_mcdc_pairs} MC/DC pairs)[/]"

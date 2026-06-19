@@ -8,7 +8,7 @@ import pytest
 
 from covxplore.experiment import flat_row
 from covxplore.generator import GenerationConfig, GenerationResult, StopReason
-from covxplore.models import (
+from covxplore.types import (
     ConditionKey,
     ConditionTraceEntry,
     CoverageDetail,
@@ -149,13 +149,11 @@ class TestFlatRow:
             function_path="/r/s.cpp::coverMe(bool)",
             prompt_variant="full",
         )
-        suite = TestSuite(
-            function_path=config.function_path,
-            covered_keys={ConditionKey(1, True), ConditionKey(1, False)},
-            total_mcdc_conditions=2,
-        )
-        suite.total_statements = 5
-        suite.total_branches = 4
+        suite = TestSuite(function_path=config.function_path)
+        suite.coverage.total_mcdc_pairs = 2
+        suite.coverage._covered_keys = {ConditionKey(1, True), ConditionKey(1, False)}
+        suite.coverage._total_statements = 5
+        suite.coverage._total_branches = 4
         result = GenerationResult(
             config=config, suite=suite, stop_reason="coverage_target",
         )

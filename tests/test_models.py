@@ -2,7 +2,7 @@
 
 import pytest
 
-from covxplore.models import (
+from covxplore.types import (
     ConditionKey,
     ConditionTraceEntry,
     CoverageDetail,
@@ -13,6 +13,34 @@ from covxplore.models import (
     UnvisitedStatement,
 )
 from covxplore.status import TestStatus
+
+
+LEGACY_TEST_SUITE_APIS = {
+    "covered_keys",
+    "total_mcdc_conditions",
+    "all_conditions",
+    "condition_id_to_text",
+    "condition_id_to_line",
+    "cumulative_uncovered_stmt_ids",
+    "cumulative_uncovered_branch_keys",
+    "_stmt_node_info",
+    "_branch_node_info",
+    "total_statements",
+    "total_branches",
+    "consecutive_redundant",
+    "_coverage_state",
+    "_sync_coverage_state",
+    "unvisited_summary",
+    "_observed_polarity_counts",
+    "coverage_gap_prompt_fragment",
+    "mcdc_coverage_pct",
+    "statement_coverage_pct",
+    "branch_coverage_pct",
+    "covered_statements",
+    "covered_branches",
+    "cumulative_unvisited_statements",
+    "cumulative_unvisited_branches",
+}
 
 
 # ------------------------------------------------------------------ #
@@ -183,22 +211,24 @@ class TestSuiteAddResult:
 
         assert len(suite.tests) == 1
         assert suite.iteration_count == 1
-        assert ConditionKey(1, True) in suite.covered_keys
+        assert ConditionKey(1, True) in suite.coverage._covered_keys
 
     def test_new_keys_accumulate(self):
-        suite = TestSuite(function_path="/f.cpp::foo()", total_mcdc_conditions=2)
+        suite = TestSuite(function_path="/f.cpp::foo()")
+        suite.coverage.total_mcdc_pairs = 2
         r1 = self._make_result("t1", node_id=1, polarity=True)
         r2 = self._make_result("t2", node_id=2, polarity=False)
 
         suite.add_result(r1)
         suite.add_result(r2)
 
-        assert len(suite.covered_keys) == 2
-        assert ConditionKey(1, True) in suite.covered_keys
-        assert ConditionKey(2, False) in suite.covered_keys
+        assert len(suite.coverage._covered_keys) == 2
+        assert ConditionKey(1, True) in suite.coverage._covered_keys
+        assert ConditionKey(2, False) in suite.coverage._covered_keys
 
     def test_new_mcdc_pairs_tracked(self):
-        suite = TestSuite(function_path="/f.cpp::foo()", total_mcdc_conditions=2)
+        suite = TestSuite(function_path="/f.cpp::foo()")
+        suite.coverage.total_mcdc_pairs = 2
         r1 = self._make_result("t1", node_id=1, polarity=True)
         r2 = self._make_result("t2", node_id=2, polarity=False)
 
@@ -211,7 +241,8 @@ class TestSuiteAddResult:
     def test_redundant_flag(self):
         """add_result checks len(self.tests) >= min_suite_size BEFORE append,
         so the 4th test with same coverage at min_suite_size=3 is redundant."""
-        suite = TestSuite(function_path="/f.cpp::foo()", total_mcdc_conditions=1)
+        suite = TestSuite(function_path="/f.cpp::foo()")
+        suite.coverage.total_mcdc_pairs = 1
         r1 = self._make_result("t1", node_id=1, polarity=True)
         r2 = self._make_result("t2", node_id=1, polarity=True)  # same coverage
         r3 = self._make_result("t3", node_id=1, polarity=True)  # still same
@@ -233,7 +264,8 @@ class TestSuiteAddResult:
     def test_redundant_with_passed_runtime_error(self):
         """Tests with PASSED or RUNTIME_ERROR status are processed.
         Redundancy only kicks in when len(tests) ≥ min_suite_size (default 3)."""
-        suite = TestSuite(function_path="/f.cpp::foo()", total_mcdc_conditions=1)
+        suite = TestSuite(function_path="/f.cpp::foo()")
+        suite.coverage.total_mcdc_pairs = 1
         r1 = self._make_result("t1", status="PASSED", node_id=1, polarity=True)
         r2 = self._make_result("t2", status="RUNTIME_ERROR", node_id=1, polarity=True)
         r3 = self._make_result("t3", status="PASSED", node_id=1, polarity=True)
@@ -254,10 +286,11 @@ class TestSuiteAddResult:
 
     def test_failed_not_processed(self):
         """FAILED/COMPILE_ERROR tests don't update covered_keys."""
-        suite = TestSuite(function_path="/f.cpp::foo()", total_mcdc_conditions=1)
+        suite = TestSuite(function_path="/f.cpp::foo()")
+        suite.coverage.total_mcdc_pairs = 1
         r = self._make_result("t1", status="FAILED", node_id=1, polarity=True)
         suite.add_result(r)
-        assert len(suite.covered_keys) == 0
+        assert len(suite.coverage._covered_keys) == 0
         assert r.new_mcdc_pairs_covered == 0
 
     def test_condition_id_text_discovered(self):
@@ -273,7 +306,7 @@ class TestSuiteAddResult:
             ],
         )
         suite.add_result(r)
-        assert suite.condition_id_to_text[42] == "a > b"
+        assert suite.coverage._condition_id_to_text[42] == "a > b"
 
     def test_iteration_counter(self):
         suite = TestSuite(function_path="/f.cpp::foo()")
@@ -284,7 +317,8 @@ class TestSuiteAddResult:
         assert suite.tests[-1].iteration == 5
 
     def test_consecutive_redundant_counter(self):
-        suite = TestSuite(function_path="/f.cpp::foo()", total_mcdc_conditions=1)
+        suite = TestSuite(function_path="/f.cpp::foo()")
+        suite.coverage.total_mcdc_pairs = 1
         # Need 4 tests covering the same key for first redundant to appear (min_suite_size=3)
         results = [
             self._make_result(f"t{i}", node_id=1, polarity=True) for i in (1, 2, 3, 4)
@@ -296,13 +330,20 @@ class TestSuiteAddResult:
         assert not results[1].is_redundant
         assert not results[2].is_redundant
         assert results[3].is_redundant
-        assert suite.consecutive_redundant == 1
+        assert suite.coverage.consecutive_redundant == 1
 
         # 5th test, same key → also redundant
         r5 = self._make_result("t5", node_id=1, polarity=True)
         suite.add_result(r5)
         assert r5.is_redundant
-        assert suite.consecutive_redundant == 2
+        assert suite.coverage.consecutive_redundant == 2
+
+    def test_test_suite_no_longer_exposes_legacy_coverage_api(self):
+        suite = TestSuite(function_path="/f.cpp::foo()")
+
+        for name in LEGACY_TEST_SUITE_APIS:
+            assert name not in suite.__dict__
+            assert not hasattr(TestSuite, name)
 
 
 # ------------------------------------------------------------------ #

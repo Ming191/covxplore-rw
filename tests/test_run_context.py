@@ -1,7 +1,7 @@
 """Tests for RunContext and ExecuteTestcaseTool custom context — pure, no network."""
 
 from covxplore.api_client import AkaUTError, ExecuteResult
-from covxplore.models import ConditionTraceEntry, TestResult, TestSuite
+from covxplore.types import ConditionTraceEntry, TestResult, TestSuite
 from covxplore.status import TestStatus
 from covxplore.tools.execute_testcase import (
     RunContext,

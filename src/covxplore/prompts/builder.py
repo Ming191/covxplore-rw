@@ -11,6 +11,7 @@ import pathlib
 from functools import lru_cache
 
 from covxplore.prompts.config import PromptConfig
+from covxplore.coverage.gap_analyzer import GapAnalyzer
 
 _SECTIONS_DIR = pathlib.Path(__file__).parent / "sections"
 
@@ -67,9 +68,9 @@ class PromptBuilder:
         static_source_text: str | None = None,
     ) -> str:
         """Assemble the task description, injecting live coverage state."""
-        from covxplore.models import TestSuite  # local import to avoid circular
+        from covxplore.types import TestSuite  # local import to avoid circular
 
-        has_mcdc = suite is not None and suite.total_mcdc_conditions > 0
+        has_mcdc = suite is not None and suite.coverage.has_mcdc
         coverage_target = (
             "MC/DC, statement, and branch coverage"
             if has_mcdc
@@ -115,12 +116,15 @@ class PromptBuilder:
         # Dynamic coverage guidance
         if self.config.coverage_guidance and suite is not None:
             assert isinstance(suite, TestSuite)
-            gap = suite.coverage_gap_prompt_fragment()
-            mcdc_pct = f"{suite.mcdc_coverage_pct * 100:.0f}"
-            stmt_pct = f"{suite.statement_coverage_pct * 100:.0f}"
-            branch_pct = f"{suite.branch_coverage_pct * 100:.0f}"
-            covered = len(suite.covered_keys)
-            total = suite.total_mcdc_conditions
+            metrics = suite.coverage.metrics(suite.tests)
+            gap = GapAnalyzer().analyze(
+                suite.coverage.gap_input(suite.tests, suite.iteration_count)
+            ).text
+            mcdc_pct = f"{metrics.mcdc_pct * 100:.0f}"
+            stmt_pct = f"{metrics.statement_pct * 100:.0f}"
+            branch_pct = f"{metrics.branch_pct * 100:.0f}"
+            covered = metrics.covered_mcdc_pairs
+            total = metrics.total_mcdc_pairs
 
             section_text = _load_section("coverage_guidance").format(
                 coverage_gap=gap,
