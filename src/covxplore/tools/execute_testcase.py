@@ -5,8 +5,10 @@ import time
 from dataclasses import dataclass, field
 
 from crewai.tools import BaseTool
-from pydantic import BaseModel, Field, PrivateAttr, ValidationError
+from pydantic import BaseModel, PrivateAttr, ValidationError
 
+from covxplore.agents.guardrails import validate_tool_input
+from covxplore.agents.schemas import GenerateTestAction
 from covxplore.api_client import AkaUTError, ExecuteResult
 from covxplore.config import get_settings
 from covxplore.driver.contract import ContractViolation
@@ -50,36 +52,6 @@ class RunContext:
         self._suites.pop(run_id, None)
 
 
-class _Input(BaseModel):
-    run_id: str = Field(
-        ...,
-        description=(
-            "Opaque generation run id provided in the task instructions. "
-            "Pass it unchanged on every execute_testcase call."
-        ),
-    )
-    absolute_path: str = Field(
-        ...,
-        description=(
-            "Absolute path of the function node being tested "
-            "(same value used throughout a generation run)."
-        ),
-    )
-    test_body: str = Field(
-        ...,
-        description=(
-            "Complete C++ test driver body to be placed inside AkaUT's test "
-            "harness. Must be valid C++ that calls the function under test and "
-            "sets up all required input variables. Do NOT include main() or "
-            "include guards — AkaUT wraps the body automatically."
-        ),
-    )
-    test_name: str | None = Field(
-        default=None,
-        description="Optional test case name (auto-generated if omitted).",
-    )
-
-
 class ExecuteTestcaseTool(BaseTool):
     name: str = "execute_testcase"
     description: str = (
@@ -88,7 +60,7 @@ class ExecuteTestcaseTool(BaseTool):
         "delta, and a list of still-unvisited condition polarities. Use the "
         "unvisited list to guide your next test."
     )
-    args_schema: type[BaseModel] = _Input
+    args_schema: type[BaseModel] = GenerateTestAction
 
     _run_context: RunContext = PrivateAttr(default_factory=RunContext)
     _executor: TestCaseExecutor = PrivateAttr(default_factory=AkaUTExecutor)
@@ -115,9 +87,28 @@ class ExecuteTestcaseTool(BaseTool):
         absolute_path: str,
         test_body: str,
         test_name: str | None = None,
+        target_node_id: int | None = None,
+        target_polarity: str | None = None,
+        target_reason: str | None = None,
     ) -> str:
         cfg = get_settings()
         suite = self._run_context.get_suite(run_id)
+
+        action_validation = validate_tool_input(
+            {
+                "run_id": run_id,
+                "absolute_path": absolute_path,
+                "test_body": test_body,
+                "test_name": test_name,
+                "target_node_id": target_node_id,
+                "target_polarity": target_polarity,
+                "target_reason": target_reason,
+            }
+        )
+        if not action_validation.ok:
+            return "[ACTION_ERROR] Invalid execute_testcase action:\n" + "\n".join(
+                f"- {error}" for error in action_validation.errors
+            )
 
         violations = self._validator.validate(test_body)
         errors = [violation for violation in violations if violation.severity == "ERROR"]
@@ -129,6 +120,9 @@ class ExecuteTestcaseTool(BaseTool):
                 status=TestStatus.COMPILE_ERROR.value,
                 execute_log=_format_contract_violations(violations),
                 elapsed_ms=elapsed,
+                target_node_id=target_node_id,
+                target_polarity=target_polarity,
+                target_reason=target_reason,
             )
             if suite:
                 suite.add_result(failed, cfg.min_suite_size)
@@ -151,6 +145,9 @@ class ExecuteTestcaseTool(BaseTool):
                     status=TestStatus.COMPILE_ERROR.value,
                     execute_log=str(exc),
                     elapsed_ms=elapsed,
+                    target_node_id=target_node_id,
+                    target_polarity=target_polarity,
+                    target_reason=target_reason,
                 )
                 if suite:
                     suite.add_result(failed, cfg.min_suite_size)
@@ -232,12 +229,15 @@ class ExecuteTestcaseTool(BaseTool):
                 for e in raw.condition_trace
             ],
             trace_summary=_parse_trace_summary(raw.trace_summary),
+            target_node_id=target_node_id,
+            target_polarity=target_polarity,
+            target_reason=target_reason,
         )
 
         if suite:
             suite.add_result(result, cfg.min_suite_size)
 
-        return _format_summary(result, suite)
+        return _format_summary(result, suite, action_validation.warnings)
 
 
 def _is_compile_or_test_body_error(exc: AkaUTError) -> bool:
@@ -275,7 +275,11 @@ def _sort_value(value: object) -> tuple[bool, str]:
     return value is None, str(value)
 
 
-def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
+def _format_summary(
+    result: TestResult,
+    suite: TestSuite | None,
+    action_warnings: list[str] | None = None,
+) -> str:
     lines = []
     redundant_tag = " [REDUNDANT — 0 new MC/DC pairs]" if result.is_redundant else ""
     lines.append(f"===  {result.test_name} | {result.status}{redundant_tag} ===")
@@ -287,6 +291,14 @@ def _format_summary(result: TestResult, suite: TestSuite | None) -> str:
         f"Branch: {b.visited}/{b.total} ({b.progress * 100:.0f}%) | "
         f"MC/DC: {m.visited}/{m.total} ({m.progress * 100:.0f}%) +{result.new_mcdc_pairs_covered} new pairs"
     )
+    if result.target_node_id is not None:
+        lines.append(
+            f"Target → node={result.target_node_id} polarity={result.target_polarity}"
+            + (f" reason={result.target_reason}" if result.target_reason else "")
+        )
+    if action_warnings:
+        lines.append("Action warnings:")
+        lines.extend(f"- {warning}" for warning in action_warnings)
     if suite:
         metrics = suite.coverage.metrics(suite.tests)
         lines.append(

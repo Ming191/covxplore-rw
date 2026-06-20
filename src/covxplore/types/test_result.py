@@ -27,6 +27,10 @@ class TestResult(BaseModel):
     condition_trace: list[ConditionTraceEntry] = Field(default_factory=list)
     trace_summary: TraceSummary | None = None
 
+    target_node_id: int | None = None
+    target_polarity: str | None = None
+    target_reason: str | None = None
+
     new_mcdc_pairs_covered: int = 0
     is_redundant: bool = False
 

@@ -200,6 +200,55 @@ class TestExecuteTestcaseToolRobustResponses:
         assert len(suite.tests) == 1
         assert suite.tests[0].status == TestStatus.COMPILE_ERROR.value
 
+    def test_tool_accepts_phase4_target_metadata(self):
+        _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
+        _FakeExecutor.error = None
+
+        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run(
+            "run-1",
+            "/x.cpp::f()",
+            "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
+            "t1",
+            target_node_id=2,
+            target_polarity="TRUE",
+            target_reason="cover node 2 true",
+        )
+
+        assert "===  t1 | PASSED" in output
+        assert "Target → node=2 polarity=TRUE reason=cover node 2 true" in output
+
+    def test_tool_rejects_invalid_phase4_action_without_calling_executor(self):
+        executor = _FakeExecutor()
+        executor.calls = []
+
+        output = ExecuteTestcaseTool(run_context=RunContext(), executor=executor)._run(
+            "run-1",
+            "/x.cpp::f()",
+            "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
+            "t1",
+            target_node_id=2,
+        )
+
+        assert "[ACTION_ERROR]" in output
+        assert "target_node_id requires target_polarity" in output
+        assert executor.calls == []
+
+    def test_tool_surfaces_target_reason_warning(self):
+        _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
+        _FakeExecutor.error = None
+
+        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run(
+            "run-1",
+            "/x.cpp::f()",
+            "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
+            "t1",
+            target_node_id=2,
+            target_polarity="FALSE",
+        )
+
+        assert "Action warnings:" in output
+        assert "target_polarity provided without target_reason" in output
+
 
 def test_format_condition_trace_sorts_mixed_node_ids_without_crashing():
     result = TestResult(
@@ -225,4 +274,4 @@ def test_fatal_tool_error_is_normal_exception():
     from covxplore.tools.execute_testcase import FatalToolError
 
     assert issubclass(FatalToolError, Exception)
-    assert not issubclass(FatalToolError, BaseException) or issubclass(FatalToolError, Exception)
+    assert FatalToolError.__bases__ == (Exception,)
