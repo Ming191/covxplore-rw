@@ -7,8 +7,10 @@ from dataclasses import dataclass, field
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
-from covxplore.api_client import AkaUTClient, AkaUTError, ExecuteResult
+from covxplore.api_client import AkaUTError, ExecuteResult
 from covxplore.config import get_settings
+from covxplore.driver.contract import ContractViolation
+from covxplore.driver import AkaUTExecutor, DriverContractValidator, TestCaseExecutor
 from covxplore.types import (
     ConditionTraceEntry,
     CoverageDetail,
@@ -89,11 +91,23 @@ class ExecuteTestcaseTool(BaseTool):
     args_schema: type[BaseModel] = _Input
 
     _run_context: RunContext = PrivateAttr(default_factory=RunContext)
+    _executor: TestCaseExecutor = PrivateAttr(default_factory=AkaUTExecutor)
+    _validator: DriverContractValidator = PrivateAttr(default_factory=DriverContractValidator)
 
-    def __init__(self, run_context: RunContext | None = None, **data):
+    def __init__(
+        self,
+        run_context: RunContext | None = None,
+        executor: TestCaseExecutor | None = None,
+        validator: DriverContractValidator | None = None,
+        **data,
+    ):
         super().__init__(**data)
         if run_context is not None:
             object.__setattr__(self, "_run_context", run_context)
+        if executor is not None:
+            object.__setattr__(self, "_executor", executor)
+        if validator is not None:
+            object.__setattr__(self, "_validator", validator)
 
     def _run(
         self,
@@ -105,12 +119,29 @@ class ExecuteTestcaseTool(BaseTool):
         cfg = get_settings()
         suite = self._run_context.get_suite(run_id)
 
+        violations = self._validator.validate(test_body)
+        errors = [violation for violation in violations if violation.severity == "ERROR"]
+        if errors:
+            elapsed = 0.0
+            failed = TestResult(
+                test_name=test_name or "contract_error",
+                test_body=test_body,
+                status=TestStatus.COMPILE_ERROR.value,
+                execute_log=_format_contract_violations(violations),
+                elapsed_ms=elapsed,
+            )
+            if suite:
+                suite.add_result(failed, cfg.min_suite_size)
+            return (
+                "[CONTRACT_ERROR] execute_testcase rejected test body before execution:\n"
+                f"{_format_contract_violations(violations)}\n"
+                "Send only valid driver body code. Do not include markdown fences, main(), "
+                "or whole translation units."
+            )
+
         t0 = time.monotonic()
         try:
-            with AkaUTClient() as client:
-                raw: ExecuteResult = client.execute_testcase(
-                    absolute_path, test_body, test_name
-                )
+            raw: ExecuteResult = self._executor.execute(absolute_path, test_body, test_name)
         except AkaUTError as exc:
             elapsed = (time.monotonic() - t0) * 1000
             if _is_compile_or_test_body_error(exc):
@@ -221,6 +252,13 @@ def _is_compile_or_test_body_error(exc: AkaUTError) -> bool:
         "incorrect variable type",
     )
     return any(marker in message for marker in compile_markers)
+
+
+def _format_contract_violations(violations: list[ContractViolation]) -> str:
+    return "\n".join(
+        f"- {violation.severity} {violation.code}: {violation.message}"
+        for violation in violations
+    )
 
 
 def _parse_trace_summary(raw: dict | None) -> TraceSummary | None:

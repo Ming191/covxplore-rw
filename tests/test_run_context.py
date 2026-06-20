@@ -84,17 +84,13 @@ class TestExecuteTestcaseToolCustomContext:
         assert suite2.function_path == "/b.cpp::b()"
 
 
-class _FakeClient:
+class _FakeExecutor:
     response: ExecuteResult | None = None
     error: AkaUTError | None = None
+    calls: list[tuple[str, str, str | None]] = []
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        return None
-
-    def execute_testcase(self, *_args, **_kwargs):
+    def execute(self, absolute_path, test_body, test_name=None):
+        self.calls.append((absolute_path, test_body, test_name))
         if self.error is not None:
             raise self.error
         assert self.response is not None
@@ -102,7 +98,7 @@ class _FakeClient:
 
 
 class TestExecuteTestcaseToolRobustResponses:
-    def test_coverage_none_does_not_crash(self, monkeypatch):
+    def test_coverage_none_does_not_crash(self):
         raw = {
             "testName": "t1",
             "status": "PASSED",
@@ -110,17 +106,16 @@ class TestExecuteTestcaseToolRobustResponses:
             "branchCoverage": None,
             "mcdcCoverage": None,
         }
-        _FakeClient.response = ExecuteResult(raw=raw)
-        _FakeClient.error = None
-        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+        _FakeExecutor.response = ExecuteResult(raw=raw)
+        _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=RunContext())._run("run-1", "/x.cpp::f()", "f();", "t1")
+        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run("run-1", "/x.cpp::f()", "f();", "t1")
 
         assert "Stmt: 0/0 (0%)" in output
         assert "Branch: 0/0 (0%)" in output
         assert "MC/DC: 0/0 (0%)" in output
 
-    def test_none_trace_and_unvisited_lists_do_not_crash(self, monkeypatch):
+    def test_none_trace_and_unvisited_lists_do_not_crash(self):
         raw = {
             "testName": "t1",
             "status": "PASSED",
@@ -129,67 +124,81 @@ class TestExecuteTestcaseToolRobustResponses:
             "unvisitedBranches": None,
             "conditionTrace": None,
         }
-        _FakeClient.response = ExecuteResult(raw=raw)
-        _FakeClient.error = None
-        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+        _FakeExecutor.response = ExecuteResult(raw=raw)
+        _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=RunContext())._run("run-1", "/x.cpp::f()", "f();", "t1")
+        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run("run-1", "/x.cpp::f()", "f();", "t1")
 
         assert "===  t1 | PASSED" in output
 
-    def test_invalid_trace_summary_does_not_crash(self, monkeypatch):
+    def test_invalid_trace_summary_does_not_crash(self):
         raw = {
             "testName": "t1",
             "status": "PASSED",
             "traceSummary": {"visited_functions": [object()]},
         }
-        _FakeClient.response = ExecuteResult(raw=raw)
-        _FakeClient.error = None
-        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+        _FakeExecutor.response = ExecuteResult(raw=raw)
+        _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=RunContext())._run("run-1", "/x.cpp::f()", "f();", "t1")
+        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run("run-1", "/x.cpp::f()", "f();", "t1")
 
         assert "===  t1 | PASSED" in output
 
-    def test_unknown_akaut_error_is_execute_error_and_not_suite_result(self, monkeypatch):
+    def test_unknown_akaut_error_is_execute_error_and_not_suite_result(self):
         ctx = RunContext()
         suite = ctx.reset_suite("/x.cpp::f()", "run-1")
-        _FakeClient.response = None
-        _FakeClient.error = AkaUTError("POST http://localhost/api/testcase/execute failed: boom")
-        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+        _FakeExecutor.response = None
+        _FakeExecutor.error = AkaUTError("POST http://localhost/api/testcase/execute failed: boom")
 
-        output = ExecuteTestcaseTool(run_context=ctx)._run("run-1", "/x.cpp::f()", "f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("run-1", "/x.cpp::f()", "f();", "t1")
 
         assert "[EXECUTE_ERROR]" in output
         assert "COMPILE_ERROR" not in output
         assert suite.tests == []
 
-    def test_tool_uses_explicit_run_id_for_suite_lookup(self, monkeypatch):
+    def test_tool_uses_explicit_run_id_for_suite_lookup(self):
         ctx = RunContext()
         suite_a = ctx.reset_suite("/a.cpp::f()", "run-A")
         suite_b = ctx.reset_suite("/b.cpp::g()", "run-B")
-        _FakeClient.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
-        _FakeClient.error = None
-        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+        _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
+        _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=ctx)._run("run-A", "/a.cpp::f()", "f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("run-A", "/a.cpp::f()", "f();", "t1")
 
         assert "Suite best" in output
         assert len(suite_a.tests) == 1
         assert suite_b.tests == []
 
-    def test_unknown_run_id_executes_without_suite_mutation(self, monkeypatch):
+    def test_unknown_run_id_executes_without_suite_mutation(self):
         ctx = RunContext()
         suite = ctx.reset_suite("/known.cpp::f()", "known-run")
-        _FakeClient.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
-        _FakeClient.error = None
-        monkeypatch.setattr("covxplore.tools.execute_testcase.AkaUTClient", _FakeClient)
+        _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
+        _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=ctx)._run("unknown-run", "/x.cpp::f()", "f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("unknown-run", "/x.cpp::f()", "f();", "t1")
 
         assert "===  t1 | PASSED" in output
         assert "Suite best" not in output
         assert suite.tests == []
+
+    def test_contract_error_rejects_without_calling_executor(self):
+        ctx = RunContext()
+        suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+        executor = _FakeExecutor()
+        executor.calls = []
+
+        output = ExecuteTestcaseTool(run_context=ctx, executor=executor)._run(
+            "run-1",
+            "/x.cpp::f()",
+            "```cpp\nf();\n```",
+            "bad",
+        )
+
+        assert "[CONTRACT_ERROR]" in output
+        assert "MARKDOWN_FENCE" in output
+        assert executor.calls == []
+        assert len(suite.tests) == 1
+        assert suite.tests[0].status == TestStatus.COMPILE_ERROR.value
 
 
 def test_format_condition_trace_sorts_mixed_node_ids_without_crashing():
