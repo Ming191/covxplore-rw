@@ -27,6 +27,13 @@ class AblationRunner:
         function_path: str,
         variants: list[str] | None = None,
         repeat: int | None = None,
+        *,
+        executor_backend: str = "akaut",
+        gtest_source_root: str | None = None,
+        gtest_project_sources: list[str] | None = None,
+        gtest_extra_compile_flags: list[str] | None = None,
+        gtest_coverage_backend: str = "gcov",
+        gtest_compiler: str | None = None,
     ) -> list[GenerationResult]:
         """Run every requested variant ``repeat`` times and collect results.
 
@@ -51,6 +58,8 @@ class AblationRunner:
             f"= {total} runs[/]"
         )
 
+        _max_zero_iter_retries = 2
+
         for variant in variants:
             for rep in range(repeat):
                 exp_cfg = GenerationConfig(
@@ -58,8 +67,27 @@ class AblationRunner:
                     prompt_variant=variant,
                     max_iterations=cfg.max_iterations,
                     mcdc_target=cfg.mcdc_target,
+                    executor_backend=executor_backend,
+                    gtest_source_root=gtest_source_root,
+                    gtest_project_sources=list(gtest_project_sources or []),
+                    gtest_extra_compile_flags=list(gtest_extra_compile_flags or []),
+                    gtest_coverage_backend=gtest_coverage_backend,
+                    gtest_compiler=gtest_compiler,
                 )
-                results.append(generate(exp_cfg))
+                result = generate(exp_cfg)
+                # Retry when LLM produced no tool calls (zero-iteration run).
+                for _retry in range(_max_zero_iter_retries):
+                    if not (
+                        result.stop_reason == "error"
+                        and result.suite.iteration_count == 0
+                    ):
+                        break
+                    _console.print(
+                        f"[yellow]Zero-iteration run detected "
+                        f"(retry {_retry + 1}/{_max_zero_iter_retries})…[/]"
+                    )
+                    result = generate(exp_cfg)
+                results.append(result)
 
         _print_matrix_summary(results)
         return results

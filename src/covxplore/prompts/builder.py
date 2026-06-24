@@ -26,6 +26,14 @@ def _load_section(name: str) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+def _load_section_gtest(name: str) -> str:
+    """Load the *_gtest variant of a section, falling back to the base name."""
+    gtest_path = _SECTIONS_DIR / f"{name}_gtest.txt"
+    if gtest_path.exists():
+        return _load_section(f"{name}_gtest")
+    return _load_section(name)
+
+
 class PromptBuilder:
     """Builds agent system prompt and task description from a PromptConfig.
 
@@ -51,10 +59,11 @@ class PromptBuilder:
             "few_shot_examples",
             "output_format",
         ]
+        loader = _load_section_gtest if self.config.gtest_mode else _load_section
         parts = []
         for section in static_sections:
             if section in self.config.enabled_sections():
-                parts.append(_load_section(section))
+                parts.append(loader(section))
         return SECTION_SEPARATOR.join(parts) if parts else ""
 
     def task_description(
@@ -117,7 +126,9 @@ class PromptBuilder:
         if self.config.coverage_guidance and suite is not None:
             assert isinstance(suite, TestSuite)
             metrics = suite.coverage.metrics(suite.tests)
-            gap = GapAnalyzer().analyze(
+            gap = GapAnalyzer(
+                mcdc_feedback=not self.config.gtest_mode
+            ).analyze(
                 suite.coverage.gap_input(suite.tests, suite.iteration_count)
             ).text
             mcdc_pct = f"{metrics.mcdc_pct * 100:.0f}"
@@ -126,7 +137,12 @@ class PromptBuilder:
             covered = metrics.covered_mcdc_pairs
             total = metrics.total_mcdc_pairs
 
-            section_text = _load_section("coverage_guidance").format(
+            section_name = (
+                "coverage_guidance_gtest"
+                if self.config.gtest_mode
+                else "coverage_guidance"
+            )
+            section_text = _load_section(section_name).format(
                 coverage_gap=gap,
                 mcdc_pct=mcdc_pct,
                 stmt_pct=stmt_pct,

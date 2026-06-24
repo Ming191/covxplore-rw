@@ -11,13 +11,14 @@ from covxplore.types.coverage_gap_input import CoverageGapInput
 class GapAnalyzer:
     """Analyze explicit coverage DTOs and render prompt guidance."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, mcdc_feedback: bool = True) -> None:
+        self._mcdc_feedback = mcdc_feedback
         self._mcdc = McdcAnalyzer()
         self._render = CoverageRenderer()
 
     def analyze(self, ci: CoverageGapInput) -> CoverageGap:
         m = ci.metrics
-        has_mcdc = m.total_mcdc_pairs > 0
+        has_mcdc = m.total_mcdc_pairs > 0 and self._mcdc_feedback
 
         if not ci.tests:
             return self._make_gap(self._render.no_tests(m.total_mcdc_pairs, has_mcdc), has_mcdc)
@@ -27,7 +28,11 @@ class GapAnalyzer:
             return terminal
 
         done = CoverageCompletion(
-            mcdc=m.total_mcdc_pairs == 0 or m.covered_mcdc_pairs >= m.total_mcdc_pairs,
+            mcdc=(
+                not self._mcdc_feedback
+                or m.total_mcdc_pairs == 0
+                or m.covered_mcdc_pairs >= m.total_mcdc_pairs
+            ),
             statement=m.total_statements == 0 or m.covered_statements >= m.total_statements,
             branch=m.total_branches == 0 or m.covered_branches >= m.total_branches,
         )
@@ -55,7 +60,7 @@ class GapAnalyzer:
 
     def _build_sections(self, ci: CoverageGapInput, done: CoverageCompletion) -> list[str]:
         m = ci.metrics
-        has_mcdc = m.total_mcdc_pairs > 0
+        has_mcdc = m.total_mcdc_pairs > 0 and self._mcdc_feedback
         sections: list[str] = []
 
         if has_mcdc and not done.mcdc:

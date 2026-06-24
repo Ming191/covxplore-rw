@@ -27,6 +27,10 @@ class PromptConfig:
     few_shot_examples: bool = False # S5 — off by default (token-expensive)
     output_format: bool = True      # S6
 
+    # When True, load *_gtest section variants (stmt/branch focus, no MC/DC,
+    # anti-code-fence rule, RUNTIME_ERROR guidance).
+    gtest_mode: bool = False
+
     def enabled_sections(self) -> list[str]:
         """Return ordered list of section names that are enabled."""
         all_sections = [

@@ -8,6 +8,7 @@ from crewai.tools import BaseTool
 from covxplore.config import get_settings
 from covxplore.llm import build_llm
 from covxplore.prompts import PromptBuilder
+from covxplore.driver import AkaUTExecutor, TestCaseExecutor
 from covxplore.tools import SearchNodesTool, GetNodeSourceTool, ExecuteTestcaseTool
 from covxplore.tools.execute_testcase import RunContext
 
@@ -81,11 +82,15 @@ def build_crew(
     *,
     max_iterations: int | None = None,
     run_context: RunContext,
+    executor: TestCaseExecutor | None = None,
 ) -> tuple["CovxploreCrew", PromptBuilder]:
     builder = PromptBuilder(prompt_config)
 
     tools = [
-        ExecuteTestcaseTool(run_context=run_context),
+        ExecuteTestcaseTool(
+            run_context=run_context,
+            executor=executor or AkaUTExecutor(),
+        ),
         GetNodeSourceTool(),
         SearchNodesTool(),
     ]

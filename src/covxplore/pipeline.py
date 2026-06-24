@@ -65,12 +65,24 @@ class ParallelPipeline:
         variants: list[str] | None = None,
         repeat: int | None = None,
         max_workers: int = 3,
+        executor_backend: str = "akaut",
+        gtest_source_root: str | None = None,
+        gtest_project_sources: list[str] | None = None,
+        gtest_extra_compile_flags: list[str] | None = None,
+        gtest_coverage_backend: str = "gcov",
+        gtest_compiler: str | None = None,
     ):
         self.paths_file = paths_file
         self.out_dir = out_dir
         self.variants = variants
         self.repeat = repeat
         self.max_workers = max_workers
+        self.executor_backend = executor_backend
+        self.gtest_source_root = gtest_source_root
+        self.gtest_project_sources = gtest_project_sources
+        self.gtest_extra_compile_flags = gtest_extra_compile_flags
+        self.gtest_coverage_backend = gtest_coverage_backend
+        self.gtest_compiler = gtest_compiler
 
     def run(self) -> Path:
         """Execute the parallel pipeline and return the path to the combined CSV."""
@@ -95,6 +107,12 @@ class ParallelPipeline:
                     out_dir=str(self.out_dir),
                     variants=self.variants,
                     repeat=self.repeat,
+                    executor_backend=self.executor_backend,
+                    gtest_source_root=self.gtest_source_root,
+                    gtest_project_sources=self.gtest_project_sources,
+                    gtest_extra_compile_flags=self.gtest_extra_compile_flags,
+                    gtest_coverage_backend=self.gtest_coverage_backend,
+                    gtest_compiler=self.gtest_compiler,
                 ): fp
                 for fp in function_paths
             }
@@ -119,6 +137,12 @@ def _run_one_process(
     out_dir: str,
     variants: list[str] | None,
     repeat: int | None,
+    executor_backend: str = "akaut",
+    gtest_source_root: str | None = None,
+    gtest_project_sources: list[str] | None = None,
+    gtest_extra_compile_flags: list[str] | None = None,
+    gtest_coverage_backend: str = "gcov",
+    gtest_compiler: str | None = None,
 ) -> list[dict]:
     """Process worker: run ablation for one function and return flat rows."""
     out_root = Path(out_dir)
@@ -131,6 +155,12 @@ def _run_one_process(
         function_path=function_path,
         variants=variants,
         repeat=repeat,
+        executor_backend=executor_backend,
+        gtest_source_root=gtest_source_root,
+        gtest_project_sources=gtest_project_sources,
+        gtest_extra_compile_flags=gtest_extra_compile_flags,
+        gtest_coverage_backend=gtest_coverage_backend,
+        gtest_compiler=gtest_compiler,
     )
     runner.export_results(results, func_out, prefix=func_name)
 

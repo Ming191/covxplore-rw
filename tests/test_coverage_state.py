@@ -1,4 +1,5 @@
 import inspect
+from pathlib import Path
 
 from covxplore.coverage.gap_analyzer import GapAnalyzer
 from covxplore.types import CoverageGapInput, CoverageMetrics
@@ -111,6 +112,48 @@ def test_coverage_state_metrics_and_gap_input_are_explicit_dtos() -> None:
     assert gap_input.tests == [first]
     assert gap_input.metrics == metrics
     assert gap_input.iteration_count == 1
+
+
+def test_coverage_state_stmt_branch_redundancy_without_mcdc_feedback() -> None:
+    state = CoverageState(mcdc_execution_feedback=False)
+    first = _result(
+        "t1",
+        stmt_unvisited=[
+            UnvisitedStatement(node_id=1, statement="a;", line_in_function=1),
+            UnvisitedStatement(node_id=2, statement="b;", line_in_function=2),
+        ],
+    )
+    second = _result(
+        "t2",
+        stmt_unvisited=[
+            UnvisitedStatement(node_id=1, statement="a;", line_in_function=1),
+            UnvisitedStatement(node_id=2, statement="b;", line_in_function=2),
+        ],
+    )
+
+    state.add_result(first, prior_results=[])
+    state.add_result(second, prior_results=[first], min_suite_size=1)
+
+    assert first.is_redundant is False
+    assert second.is_redundant is True
+    assert second.new_mcdc_pairs_covered == 0
+
+
+def test_infer_gtest_config_from_function_path(tmp_path: Path) -> None:
+    from covxplore.driver.gtest_executor import infer_gtest_config
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "main.cpp").write_text("int main() {}", encoding="utf-8")
+    (root / "helper.cpp").write_text("void help() {}", encoding="utf-8")
+    (root / "util.c").write_text("void util() {}", encoding="utf-8")
+
+    cfg = infer_gtest_config(str(root / "main.cpp") + "/Ns::foo()")
+    assert cfg["gtest_source_root"] == str(root)
+    assert str(root / "helper.cpp") in cfg["gtest_project_sources"]
+    assert str(root / "util.c") in cfg["gtest_project_sources"]
+    assert str(root / "main.cpp") not in cfg["gtest_project_sources"]
+    assert cfg["gtest_extra_compile_flags"] == ["-std=c++14"]
 
 
 def test_gap_analyzer_accepts_gap_input_not_suite_object() -> None:

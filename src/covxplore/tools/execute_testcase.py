@@ -31,7 +31,86 @@ logger = logging.getLogger(__name__)
 
 
 class FatalToolError(Exception):
-    pass
+    """Raised for unrecoverable API/infrastructure errors during tool execution."""
+
+
+class HardStop(BaseException):
+    """Raised inside execute_testcase to hard-terminate the agent loop.
+
+    Inherits from ``BaseException`` (not ``Exception``) so that it bypasses
+    CrewAI's broad ``except Exception`` error-recovery handlers in
+    ``ToolUsage._use()`` and propagates directly out of ``crew.kickoff()``
+    to be caught by ``generator.generate()``.
+
+    Attributes:
+        reason: One of ``"coverage_target"`` or ``"redundant_streak"``.
+    """
+
+    def __init__(self, reason: str, message: str = "") -> None:
+        super().__init__(message or reason)
+        self.reason = reason
+
+
+def _is_coverage_done(suite: TestSuite, mcdc_target: float) -> bool:
+    """Return True when all coverage targets defined by *mcdc_target* are satisfied.
+
+    Mirrors ``generator._coverage_target_reached`` but operates on the live
+    suite object available inside the tool, without requiring ``GenerationConfig``.
+
+    Returns False when no coverage data has been collected at all (total counts
+    are all zero), to avoid spuriously hard-stopping on the first test when the
+    backend returned an empty payload.
+    """
+    if suite.iteration_count == 0:
+        return False
+    metrics = suite.coverage.metrics(suite.tests)
+    # Guard: require at least some statement or branch data before declaring
+    # done.  Any real function has ≥1 statement; zero totals means the executor
+    # has not yet successfully measured coverage (e.g. all tests so far were
+    # compile errors).
+    if metrics.total_statements == 0 and metrics.total_branches == 0:
+        return False
+    mcdc_done = (
+        not suite.coverage.mcdc_execution_feedback
+        or metrics.total_mcdc_pairs == 0
+        or metrics.mcdc_pct >= mcdc_target
+        or not suite.coverage.unvisited_summary()
+    )
+    stmt_done = (
+        metrics.total_statements == 0
+        or metrics.covered_statements >= metrics.total_statements
+    )
+    branch_done = (
+        metrics.total_branches == 0
+        or metrics.covered_branches >= metrics.total_branches
+    )
+    return mcdc_done and stmt_done and branch_done
+
+
+def _raise_if_hard_stop(suite: TestSuite, cfg: object) -> None:
+    """Raise :class:`HardStop` when a termination condition is met.
+
+    Called after every successful ``suite.add_result()`` call so the agent
+    loop is interrupted immediately rather than waiting for the LLM to
+    voluntarily output ``DONE:``.
+
+    Redundant-streak is checked first; coverage-target is checked second so
+    that a run which reaches 100% coverage on its last test is labelled
+    ``coverage_target``, not ``redundant_streak``.
+    """
+    redundant_limit: int = getattr(cfg, "redundant_streak_limit", 3)
+    mcdc_target: float = getattr(cfg, "mcdc_target", 1.0)
+
+    if suite.coverage.consecutive_redundant >= redundant_limit:
+        raise HardStop(
+            "redundant_streak",
+            f"Hard stop: {redundant_limit} consecutive redundant tests — agent loop terminated.",
+        )
+    if _is_coverage_done(suite, mcdc_target):
+        raise HardStop(
+            "coverage_target",
+            "Hard stop: all coverage targets met — agent loop terminated.",
+        )
 
 
 @dataclass
@@ -93,6 +172,17 @@ class ExecuteTestcaseTool(BaseTool):
     ) -> str:
         cfg = get_settings()
         suite = self._run_context.get_suite(run_id)
+
+        # Validate that the agent did not mistype the absolute_path.
+        # The suite was initialised with the correct function_path by the generator.
+        if suite is not None and absolute_path != suite.function_path:
+            return (
+                "[PATH_ERROR] absolute_path does not match this run's function path.\n"
+                f"  You sent    : {absolute_path!r}\n"
+                f"  Required    : {suite.function_path!r}\n"
+                "Copy the absolute_path character-for-character from the task header. "
+                "Do NOT retype or paraphrase it."
+            )
 
         action_validation = validate_tool_input(
             {
@@ -236,6 +326,11 @@ class ExecuteTestcaseTool(BaseTool):
 
         if suite:
             suite.add_result(result, cfg.min_suite_size)
+            # Only evaluate hard-stop conditions when the test contributed real
+            # coverage data.  COMPILE_ERROR / FAILED tests leave coverage
+            # unchanged, so firing a hard stop on them would be incorrect.
+            if result.status in {TestStatus.PASSED.value, TestStatus.RUNTIME_ERROR.value}:
+                _raise_if_hard_stop(suite, cfg)
 
         return _format_summary(result, suite, action_validation.warnings)
 
@@ -281,16 +376,31 @@ def _format_summary(
     action_warnings: list[str] | None = None,
 ) -> str:
     lines = []
-    redundant_tag = " [REDUNDANT — 0 new MC/DC pairs]" if result.is_redundant else ""
+    gcov_mode = suite is not None and not suite.coverage.mcdc_execution_feedback
+    if result.is_redundant:
+        redundant_tag = (
+            " [REDUNDANT — no new stmt/branch progress]"
+            if gcov_mode
+            else " [REDUNDANT — 0 new MC/DC pairs]"
+        )
+    else:
+        redundant_tag = ""
     lines.append(f"===  {result.test_name} | {result.status}{redundant_tag} ===")
     s = result.statement_coverage
     b = result.branch_coverage
     m = result.mcdc_coverage
-    lines.append(
-        f"This test  → Stmt: {s.visited}/{s.total} ({s.progress * 100:.0f}%) | "
-        f"Branch: {b.visited}/{b.total} ({b.progress * 100:.0f}%) | "
-        f"MC/DC: {m.visited}/{m.total} ({m.progress * 100:.0f}%) +{result.new_mcdc_pairs_covered} new pairs"
-    )
+    if gcov_mode:
+        lines.append(
+            f"This test  → Stmt: {s.visited}/{s.total} ({s.progress * 100:.0f}%) | "
+            f"Branch: {b.visited}/{b.total} ({b.progress * 100:.0f}%) "
+            f"(gcov — MC/DC not measured by this backend)"
+        )
+    else:
+        lines.append(
+            f"This test  → Stmt: {s.visited}/{s.total} ({s.progress * 100:.0f}%) | "
+            f"Branch: {b.visited}/{b.total} ({b.progress * 100:.0f}%) | "
+            f"MC/DC: {m.visited}/{m.total} ({m.progress * 100:.0f}%) +{result.new_mcdc_pairs_covered} new pairs"
+        )
     if result.target_node_id is not None:
         lines.append(
             f"Target → node={result.target_node_id} polarity={result.target_polarity}"
@@ -301,16 +411,28 @@ def _format_summary(
         lines.extend(f"- {warning}" for warning in action_warnings)
     if suite:
         metrics = suite.coverage.metrics(suite.tests)
-        lines.append(
-            f"Suite best → Stmt: {metrics.statement_pct * 100:.0f}% | "
-            f"Branch: {metrics.branch_pct * 100:.0f}% | "
-            f"MC/DC: {metrics.covered_mcdc_pairs}/{metrics.total_mcdc_pairs} "
-            f"({metrics.mcdc_pct * 100:.0f}%) | "
-            f"iter={suite.iteration_count} | "
-            f"redundancy={suite.redundancy_rate * 100:.0f}%"
-        )
+        if gcov_mode:
+            lines.append(
+                f"Suite best → Stmt: {metrics.statement_pct * 100:.0f}% "
+                f"({metrics.covered_statements}/{metrics.total_statements}) | "
+                f"Branch: {metrics.branch_pct * 100:.0f}% "
+                f"({metrics.covered_branches}/{metrics.total_branches}) | "
+                f"iter={suite.iteration_count} | "
+                f"redundancy={suite.redundancy_rate * 100:.0f}%"
+            )
+        else:
+            lines.append(
+                f"Suite best → Stmt: {metrics.statement_pct * 100:.0f}% | "
+                f"Branch: {metrics.branch_pct * 100:.0f}% | "
+                f"MC/DC: {metrics.covered_mcdc_pairs}/{metrics.total_mcdc_pairs} "
+                f"({metrics.mcdc_pct * 100:.0f}%) | "
+                f"iter={suite.iteration_count} | "
+                f"redundancy={suite.redundancy_rate * 100:.0f}%"
+            )
         try:
-            gap = GapAnalyzer().analyze(
+            gap = GapAnalyzer(
+                mcdc_feedback=suite.coverage.mcdc_execution_feedback
+            ).analyze(
                 suite.coverage.gap_input(suite.tests, suite.iteration_count)
             ).text
         except RuntimeError as exc:
@@ -325,6 +447,15 @@ def _format_summary(
 
     if is_failure_status(result.status) and result.execute_log:
         lines.append(f"\nExecution log:\n{result.execute_log.strip()}")
+
+    if gcov_mode and result.status == TestStatus.RUNTIME_ERROR.value:
+        lines.append(
+            "\nNOTE: RUNTIME_ERROR — the function threw an exception or crashed. "
+            "gcov still recorded all lines executed before the failure. "
+            "Check the gap above: if stmt% or branch% improved this is useful coverage. "
+            "Do NOT treat this as a dead end — call execute_testcase again targeting "
+            "the next uncovered line or branch direction shown above."
+        )
 
     return "\n".join(lines)
 

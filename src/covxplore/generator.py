@@ -19,11 +19,12 @@ from rich.console import Console
 
 from covxplore.config import get_settings
 from covxplore.crew import build_crew
+from covxplore.driver import create_executor
 from covxplore.llm_logger import LLMInteractionLogger
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.prompts.registry import get_variant
 from covxplore.status import TestStatus
-from covxplore.tools.execute_testcase import RunContext
+from covxplore.tools.execute_testcase import HardStop, RunContext
 from covxplore.types import TestSuite
 
 _console = Console()
@@ -49,6 +50,12 @@ class GenerationConfig:
         default_factory=lambda: get_settings().redundant_streak_limit
     )
     run_id: str | None = None
+    executor_backend: str = "akaut"
+    gtest_source_root: str | None = None
+    gtest_project_sources: list[str] = field(default_factory=list)
+    gtest_extra_compile_flags: list[str] = field(default_factory=list)
+    gtest_coverage_backend: str = "gcov"
+    gtest_compiler: str | None = None
 
     def __post_init__(self):
         if not self.run_id:
@@ -66,6 +73,7 @@ class GenerationConfig:
             "prompt_variant": self.prompt_variant,
             "max_iterations": self.max_iterations,
             "mcdc_target": self.mcdc_target,
+            "executor_backend": self.executor_backend,
         }
 
 
@@ -192,6 +200,34 @@ def generate(config: GenerationConfig) -> GenerationResult:
     run_context = RunContext()
 
     suite: TestSuite = run_context.reset_suite(config.function_path, config.run_id)
+    is_gtest = config.executor_backend.strip().lower() in ("gtest", "gcov", "local")
+    if is_gtest:
+        suite.coverage.mcdc_execution_feedback = False
+        if config.prompt_variant in ("baseline",):
+            _console.print(
+                "[yellow]gtest executor: variant 'baseline' lacks test-driver format rules; "
+                "prefer 'no_reflection' or 'full'.[/]"
+            )
+        inferred = None
+        try:
+            from covxplore.driver.gtest_executor import infer_gtest_config
+
+            inferred = infer_gtest_config(
+                config.function_path,
+                source_root=config.gtest_source_root,
+                project_sources=config.gtest_project_sources or None,
+                extra_compile_flags=config.gtest_extra_compile_flags or None,
+            )
+            _console.print(
+                f"[dim]gtest: backend={config.gtest_coverage_backend} "
+                f"| compiler={config.gtest_compiler or 'auto'} "
+                f"| root={inferred['gtest_source_root']} "
+                f"| link {len(inferred['gtest_project_sources'])} sibling source(s) "
+                f"| flags={inferred['gtest_extra_compile_flags']}[/]"
+            )
+        except OSError as exc:
+            _console.print(f"[yellow]gtest auto-config warning: {exc}[/]")
+
     _prefetch_conditions(suite)
 
     if not suite.coverage.has_mcdc:
@@ -215,6 +251,15 @@ def generate(config: GenerationConfig) -> GenerationResult:
             prompt_config=prompt_config,
             max_iterations=config.max_iterations,
             run_context=run_context,
+            executor=create_executor(
+                config.executor_backend,
+                function_path=config.function_path,
+                gtest_source_root=config.gtest_source_root,
+                gtest_project_sources=config.gtest_project_sources or None,
+                gtest_extra_compile_flags=config.gtest_extra_compile_flags or None,
+                gtest_coverage_backend=config.gtest_coverage_backend,
+                gtest_compiler=config.gtest_compiler,
+            ),
         )
         assert isinstance(builder, PromptBuilder)
         inputs = {
@@ -232,6 +277,11 @@ def generate(config: GenerationConfig) -> GenerationResult:
         crew_obj = crew_inst.crew()
         llm_logger.attach()
         crew_obj.kickoff(inputs=inputs)
+
+    except HardStop as e:
+        stop_reason = e.reason  # type: ignore[assignment]
+        error_msg = None
+        _console.print(f"[green]Hard stop ({e.reason}): {e}[/]")
 
     except BaseException as e:
         stop_reason = "error"
@@ -253,26 +303,41 @@ def generate(config: GenerationConfig) -> GenerationResult:
                 tracing_url = getattr(crew_inst.crew(), "_telemetry_url", None)
             except Exception:
                 pass
+        if not crew_prompt_tokens:
+            crew_prompt_tokens = sum(
+                i["usage"].get("prompt_tokens", 0) for i in llm_logger.interactions
+            ) or None
+        if not crew_completion_tokens:
+            crew_completion_tokens = sum(
+                i["usage"].get("completion_tokens", 0) for i in llm_logger.interactions
+            ) or None
         final_suite = run_context.get_suite(config.run_id) or suite
         _reconcile_tokens(crew_inst, final_suite)
 
-    # We must deduce early stops manually based on the final achieved coverage
-    if final_suite.iteration_count >= config.max_iterations:
-        stop_reason = "max_iter"
-        error_msg = None
-        _console.print(
-            f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]"
-        )
-    elif final_suite.coverage.consecutive_redundant >= config.redundant_streak_limit:
-        stop_reason = "redundant_streak"
-        error_msg = None
-        _console.print(
-            f"[yellow]Stopped: {config.redundant_streak_limit} consecutive redundant tests[/]"
-        )
-    elif _coverage_target_reached(final_suite, config):
-        stop_reason = "coverage_target"
-        error_msg = None
-        _console.print("[green]Stopped gracefully: reached coverage target[/]")
+    if stop_reason == "agent_done":
+        if final_suite.iteration_count == 0:
+            # LLM returned a text answer without calling execute_testcase at all.
+            # This is non-deterministic LLM behaviour; flag as error so callers
+            # can retry rather than silently recording a 0-iteration result.
+            stop_reason = "error"
+            error_msg = (
+                "LLM returned a final answer without calling execute_testcase "
+                "(0 tool calls). Re-run to retry."
+            )
+            _console.print("[red]Agent produced no tool calls (0 iterations) — marking as error.[/]")
+        elif _coverage_target_reached(final_suite, config):
+            stop_reason = "coverage_target"
+            _console.print("[green]Stopped gracefully: reached coverage target[/]")
+        elif final_suite.coverage.consecutive_redundant >= config.redundant_streak_limit:
+            stop_reason = "redundant_streak"
+            _console.print(
+                f"[yellow]Stopped: {config.redundant_streak_limit} consecutive redundant tests[/]"
+            )
+        elif final_suite.iteration_count >= config.max_iterations:
+            stop_reason = "max_iter"
+            _console.print(
+                f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]"
+            )
 
     result = GenerationResult(
         config=config,
@@ -295,8 +360,14 @@ def _coverage_target_reached(suite: TestSuite, config: GenerationConfig) -> bool
     if suite.iteration_count == 0:
         return False
     metrics = suite.coverage.metrics(suite.tests)
+    # Guard: require at least some statement or branch data before declaring
+    # done.  Zero totals means no test has successfully measured coverage yet
+    # (e.g. all tests compiled with errors).
+    if metrics.total_statements == 0 and metrics.total_branches == 0:
+        return False
     mcdc_done = (
-        metrics.total_mcdc_pairs == 0
+        not suite.coverage.mcdc_execution_feedback
+        or metrics.total_mcdc_pairs == 0
         or metrics.mcdc_pct >= config.mcdc_target
         or not suite.coverage.unvisited_summary()
     )

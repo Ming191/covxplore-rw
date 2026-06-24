@@ -12,6 +12,73 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
+# Shared CLI: test executor backend
+# ---------------------------------------------------------------------------
+
+def _add_executor_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--executor",
+        choices=("akaut", "gtest"),
+        default="akaut",
+        help=(
+            "Test execution backend: akaut (REST API, default) or gtest "
+            "(local clang++/g++; auto-configures from --path). "
+            "Use --gtest-coverage-backend to pick gcov vs llvm."
+        ),
+    )
+    parser.add_argument(
+        "--gtest-source-root",
+        default=None,
+        metavar="DIR",
+        help="Override gtest include/link root (default: parent dir of source file).",
+    )
+    parser.add_argument(
+        "--gtest-source",
+        action="append",
+        default=[],
+        dest="gtest_project_sources",
+        metavar="FILE",
+        help="Extra .cpp to link (default: all sibling sources in the directory).",
+    )
+    parser.add_argument(
+        "--gtest-extra-flag",
+        action="append",
+        default=[],
+        dest="gtest_extra_compile_flags",
+        metavar="FLAG",
+        help="Extra g++ flag (default: -std=c++14 for .cpp targets).",
+    )
+    parser.add_argument(
+        "--gtest-coverage-backend",
+        choices=("gcov", "llvm"),
+        default="gcov",
+        help=(
+            "Coverage instrumentation for gtest executor: gcov (g++/gcov, default) "
+            "or llvm (clang++/llvm-cov)."
+        ),
+    )
+    parser.add_argument(
+        "--gtest-compiler",
+        default=None,
+        metavar="CC",
+        help=(
+            "Override compiler for gtest executor. "
+            "Default: g++/gcc for gcov, clang++/clang for llvm."
+        ),
+    )
+
+
+def _executor_kwargs(args: argparse.Namespace) -> dict:
+    return {
+        "executor_backend": args.executor,
+        "gtest_source_root": args.gtest_source_root,
+        "gtest_project_sources": args.gtest_project_sources,
+        "gtest_extra_compile_flags": args.gtest_extra_compile_flags,
+        "gtest_coverage_backend": args.gtest_coverage_backend,
+        "gtest_compiler": args.gtest_compiler,
+    }
+
+# ---------------------------------------------------------------------------
 # run_generation  (covxplore-gen)
 # ---------------------------------------------------------------------------
 
@@ -41,6 +108,7 @@ def run_generation() -> None:
         "--mcdc-target", type=float, default=None,
         help="Override MC/DC target 0.0–1.0 (default: Settings.mcdc_target).",
     )
+    _add_executor_args(parser)
     args = parser.parse_args()
 
     from covxplore.config import get_settings
@@ -54,6 +122,7 @@ def run_generation() -> None:
         prompt_variant=variant,
         max_iterations=args.max_iter if args.max_iter is not None else cfg.max_iterations,
         mcdc_target=args.mcdc_target if args.mcdc_target is not None else cfg.mcdc_target,
+        **_executor_kwargs(args),
     )
 
     result = generate(exp_cfg)
@@ -88,6 +157,7 @@ def run_ablation() -> None:
     )
     parser.add_argument("--repeat", "-r", type=int, default=None)
     parser.add_argument("--out", "-o", default="results")
+    _add_executor_args(parser)
     args = parser.parse_args()
 
     from covxplore.ablation import AblationRunner
@@ -103,6 +173,7 @@ def run_ablation() -> None:
         function_path=args.path,
         variants=variants,
         repeat=args.repeat,
+        **_executor_kwargs(args),
     )
     runner.export_results(results, Path(args.out))
 
@@ -147,6 +218,7 @@ def run_parallel() -> None:
         "--out", "-o", default="results",
         help="Root output directory. Each function gets a subdirectory (default: results).",
     )
+    _add_executor_args(parser)
     args = parser.parse_args()
 
     from covxplore.pipeline import ParallelPipeline
@@ -163,6 +235,7 @@ def run_parallel() -> None:
         variants=variants,
         repeat=args.repeat,
         max_workers=args.workers,
+        **_executor_kwargs(args),
     )
     summary_path = pipeline.run()
     print(f"\nPipeline complete. Summary: {summary_path}")

@@ -126,6 +126,20 @@ VARIANTS: dict[str, PromptConfig] = {
     ),
 
     # ------------------------------------------------------------------ #
+    # Gtest-specific variants (stmt/branch focus, no MC/DC)              #
+    # ------------------------------------------------------------------ #
+    "gtest_no_reflection": PromptConfig(
+        "gtest_no_reflection",
+        role_persona=True,
+        cot_reasoning=True,
+        coverage_guidance=True,
+        self_reflection=False,
+        few_shot_examples=False,
+        output_format=True,
+        gtest_mode=True,
+    ),
+
+    # ------------------------------------------------------------------ #
     # Full variants                                                       #
     # ------------------------------------------------------------------ #
     "full": PromptConfig(

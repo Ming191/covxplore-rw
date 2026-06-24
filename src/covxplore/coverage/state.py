@@ -38,12 +38,17 @@ class CoverageState:
     _cumulative_uncovered_branch_keys: set[tuple[int, bool]] | None = None
     _stmt_node_info: dict[int, UnvisitedStatement] = field(default_factory=dict)
     _branch_node_info: dict[int, UnvisitedBranch] = field(default_factory=dict)
+    _gtest_covered_stmt_ids: set[int] = field(default_factory=set)
+    _gtest_covered_branch_keys: set[tuple[int, bool]] = field(default_factory=set)
     _total_statements: int = 0
     _total_branches: int = 0
 
     total_mcdc_pairs: int = 0
     """Total MC/DC pairs to cover (0 means no MC/DC data).
     Set via :meth:`seed_conditions` or discovered from test results."""
+
+    mcdc_execution_feedback: bool = True
+    """When False (gtest/gcov backend), redundancy and gap text use stmt/branch only."""
 
     consecutive_redundant: int = 0
     """Counter of back-to-back redundant tests; reset on progress."""
@@ -65,25 +70,40 @@ class CoverageState:
         if normalized not in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}:
             return
 
-        raw_keys = result.condition_keys()
-        new_keys = raw_keys - self._covered_keys
-        result.new_mcdc_pairs_covered = len(new_keys)
-        result.is_redundant = (
-            self.total_mcdc_pairs > 0
-            and len(new_keys) == 0
-            and len(prior_results) >= min_suite_size
-        )
-        self._covered_keys |= new_keys
+        stmt_before = self._covered_statements(prior_results)
+        br_before = self._covered_branches(prior_results)
 
-        if result.is_redundant:
-            self.consecutive_redundant += 1
+        if self.mcdc_execution_feedback:
+            raw_keys = result.condition_keys()
+            new_keys = raw_keys - self._covered_keys
+            result.new_mcdc_pairs_covered = len(new_keys)
+            result.is_redundant = (
+                self.total_mcdc_pairs > 0
+                and len(new_keys) == 0
+                and len(prior_results) >= min_suite_size
+            )
+            self._covered_keys |= new_keys
         else:
-            self.consecutive_redundant = 0
+            result.new_mcdc_pairs_covered = 0
 
         self._discover_conditions(result)
         self._update_totals(result)
         self._update_statement_intersection(result)
         self._update_branch_intersection(result)
+
+        if not self.mcdc_execution_feedback:
+            self._record_gtest_union(result)
+            stmt_after = self._covered_statements(prior_results + [result])
+            br_after = self._covered_branches(prior_results + [result])
+            improved = stmt_after > stmt_before or br_after > br_before
+            result.is_redundant = (
+                len(prior_results) >= min_suite_size and not improved
+            )
+
+        if result.is_redundant:
+            self.consecutive_redundant += 1
+        else:
+            self.consecutive_redundant = 0
 
     def seed_conditions(self, conditions, total_mcdc_pairs: int | None = None) -> None:
         """Pre-populate condition metadata from static CFG before generation."""
@@ -151,13 +171,15 @@ class CoverageState:
     def _covered_statements(self, tests: list[TestResult]) -> int:
         if self._total_statements == 0:
             return 0
+        if not self.mcdc_execution_feedback:
+            return min(self._total_statements, len(self._gtest_covered_stmt_ids))
         best_single = 0
         for test in tests:
             normalized = normalize_test_status(test.status)
             if normalized in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}:
                 best_single = max(best_single, test.statement_coverage.visited)
         derived = None
-        if self._cumulative_uncovered_stmt_ids is not None:
+        if self.mcdc_execution_feedback and self._cumulative_uncovered_stmt_ids is not None:
             uncovered = len(self._cumulative_uncovered_stmt_ids)
             if uncovered <= self._total_statements:
                 derived = self._total_statements - uncovered
@@ -167,11 +189,25 @@ class CoverageState:
     def _covered_branches(self, tests: list[TestResult]) -> int:
         if self._total_branches == 0:
             return 0
+        if not self.mcdc_execution_feedback:
+            # Count decisions where BOTH true AND false outcomes are covered.
+            # _total_branches = num_decisions (one per if/while/etc.).
+            # _gtest_covered_branch_keys maps (node_id, polarity) → covered.
+            # A decision is only "covered" when both polarities have been exercised.
+            complete = sum(
+                1
+                for node_id in self._branch_node_info
+                if (node_id, True) in self._gtest_covered_branch_keys
+                and (node_id, False) in self._gtest_covered_branch_keys
+            )
+            return min(self._total_branches, complete)
         best_single = 0
         for test in tests:
             normalized = normalize_test_status(test.status)
             if normalized in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}:
                 best_single = max(best_single, test.branch_coverage.visited)
+        if not self.mcdc_execution_feedback:
+            return min(self._total_branches, max(0, best_single))
         derived = None
         if self._cumulative_uncovered_branch_keys is not None:
             uncovered = len(self._cumulative_uncovered_branch_keys)
@@ -191,6 +227,13 @@ class CoverageState:
         return self._covered_branches(tests) / self._total_branches
 
     def _cumulative_unvisited_stmts(self) -> list[UnvisitedStatement]:
+        if not self.mcdc_execution_feedback and self._total_statements > 0:
+            return [
+                self._stmt_node_info[line_id]
+                for line_id in range(1, self._total_statements + 1)
+                if line_id not in self._gtest_covered_stmt_ids
+                and line_id in self._stmt_node_info
+            ]
         if self._cumulative_uncovered_stmt_ids is None:
             return []
         return [
@@ -200,6 +243,8 @@ class CoverageState:
         ]
 
     def _cumulative_unvisited_brs(self) -> list[UnvisitedBranch]:
+        if not self.mcdc_execution_feedback:
+            return self._gtest_suite_unvisited_branches()
         if self._cumulative_uncovered_branch_keys is None:
             return []
         node_missing: dict[int, tuple[bool, bool]] = {}
@@ -249,9 +294,77 @@ class CoverageState:
         if self.total_mcdc_pairs == 0 and result.mcdc_coverage.total > 0:
             self.total_mcdc_pairs = result.mcdc_coverage.total
         if result.statement_coverage.total > 0:
-            self._total_statements = result.statement_coverage.total
+            if self.mcdc_execution_feedback:
+                self._total_statements = max(
+                    self._total_statements, result.statement_coverage.total
+                )
+            else:
+                self._total_statements = result.statement_coverage.total
         if result.branch_coverage.total > 0:
-            self._total_branches = result.branch_coverage.total
+            if self.mcdc_execution_feedback:
+                self._total_branches = max(
+                    self._total_branches, result.branch_coverage.total
+                )
+            else:
+                self._total_branches = result.branch_coverage.total
+
+    def _record_gtest_union(self, result: TestResult) -> None:
+        """Union per-test coverage into suite-level stmt/branch sets (gcov mode)."""
+        stmt_total = result.statement_coverage.total
+        if stmt_total > 0:
+            uncovered_stmt = {
+                s.node_id
+                for s in result.unvisited_statements
+                if s.node_id is not None
+            }
+            for line_id in range(1, stmt_total + 1):
+                if line_id not in uncovered_stmt:
+                    self._gtest_covered_stmt_ids.add(line_id)
+            for statement in result.unvisited_statements:
+                if statement.node_id is not None:
+                    self._stmt_node_info[statement.node_id] = statement
+
+        for branch in result.unvisited_branches:
+            node_id = (
+                branch.node_id
+                if branch.node_id is not None
+                else branch.line_in_function
+            )
+            if node_id is None:
+                continue
+            self._branch_node_info[node_id] = branch
+            if branch.true_visited:
+                self._gtest_covered_branch_keys.add((node_id, True))
+            if branch.false_visited:
+                self._gtest_covered_branch_keys.add((node_id, False))
+
+    def _gtest_suite_unvisited_branches(self) -> list[UnvisitedBranch]:
+        if self._total_branches == 0:
+            return []
+        outcomes: list[UnvisitedBranch] = []
+        for node_id, info in sorted(
+            self._branch_node_info.items(),
+            key=lambda item: (
+                item[1].line_in_function is None,
+                item[1].line_in_function or 0,
+                item[0],
+            ),
+        ):
+            true_missing = (node_id, True) not in self._gtest_covered_branch_keys
+            false_missing = (node_id, False) not in self._gtest_covered_branch_keys
+            if true_missing or false_missing:
+                outcomes.append(
+                    UnvisitedBranch(
+                        node_id=node_id,
+                        condition=info.condition,
+                        true_visited=not true_missing,
+                        false_visited=not false_missing,
+                        line_in_function=info.line_in_function,
+                        start_offset=info.start_offset,
+                        end_offset=info.end_offset,
+                    )
+                )
+        return outcomes
 
     def _update_statement_intersection(self, result: TestResult) -> None:
         test_uncovered_stmt_ids: set[int] = set()
@@ -276,7 +389,7 @@ class CoverageState:
             self._branch_node_info[branch.node_id] = branch
         if self._cumulative_uncovered_branch_keys is None:
             self._cumulative_uncovered_branch_keys = test_uncovered_branch_keys
-        else:
+        elif self.mcdc_execution_feedback:
             self._cumulative_uncovered_branch_keys &= test_uncovered_branch_keys
 
     # ------------------------------------------------------------------
