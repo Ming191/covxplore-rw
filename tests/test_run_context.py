@@ -1,9 +1,12 @@
 """Tests for RunContext and ExecuteTestcaseTool custom context — pure, no network."""
 
+import pytest
+
 from covxplore.api_client import AkaUTError, ExecuteResult
 from covxplore.types import ConditionTraceEntry, TestResult, TestSuite
 from covxplore.status import TestStatus
 from covxplore.tools.execute_testcase import (
+    HardStop,
     RunContext,
     ExecuteTestcaseTool,
     _format_condition_trace,
@@ -248,6 +251,58 @@ class TestExecuteTestcaseToolRobustResponses:
 
         assert "Action warnings:" in output
         assert "target_polarity provided without target_reason" in output
+
+    def test_tool_hard_stops_when_coverage_target_reached(self):
+        ctx = RunContext()
+        suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+        _FakeExecutor.response = ExecuteResult(
+            raw={
+                "testName": "t1",
+                "status": "PASSED",
+                "statementCoverage": {"visited": 2, "total": 2, "progress": 1.0},
+                "branchCoverage": {"visited": 2, "total": 2, "progress": 1.0},
+                "mcdcCoverage": {"visited": 0, "total": 0, "progress": 0.0},
+            }
+        )
+        _FakeExecutor.error = None
+
+        with pytest.raises(HardStop) as exc:
+            ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+                "run-1", "/x.cpp::f()", "f();", "t1"
+            )
+
+        assert exc.value.reason == "coverage_target"
+        assert len(suite.tests) == 1
+
+    def test_tool_hard_stops_on_redundant_streak(self, monkeypatch):
+        ctx = RunContext()
+        suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+        suite.coverage.total_mcdc_pairs = 2
+        suite.coverage.consecutive_redundant = 2
+
+        settings = type(
+            "Settings",
+            (),
+            {"min_suite_size": 0, "redundant_streak_limit": 3, "mcdc_target": 1.0},
+        )()
+        monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
+        # Omit statement/branch coverage so _total_statements/_total_branches stay 0
+        # and _is_coverage_done returns False (guard triggers).
+        _FakeExecutor.response = ExecuteResult(
+            raw={
+                "testName": "t1",
+                "status": "PASSED",
+            }
+        )
+        _FakeExecutor.error = None
+
+        with pytest.raises(HardStop) as exc:
+            ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+                "run-1", "/x.cpp::f()", "f();", "t1"
+            )
+
+        assert exc.value.reason == "redundant_streak"
+        assert suite.coverage.consecutive_redundant == 3
 
 
 def test_format_condition_trace_sorts_mixed_node_ids_without_crashing():

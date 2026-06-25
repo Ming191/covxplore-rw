@@ -23,7 +23,7 @@ from covxplore.llm_logger import LLMInteractionLogger
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.prompts.registry import get_variant
 from covxplore.status import TestStatus
-from covxplore.tools.execute_testcase import RunContext
+from covxplore.tools.execute_testcase import HardStop, RunContext
 from covxplore.types import TestSuite
 
 _console = Console()
@@ -233,6 +233,11 @@ def generate(config: GenerationConfig) -> GenerationResult:
         llm_logger.attach()
         crew_obj.kickoff(inputs=inputs)
 
+    except HardStop as e:
+        stop_reason = e.reason  # type: ignore[assignment]
+        error_msg = None
+        _console.print(f"[green]Hard stop ({e.reason}): {e}[/]")
+
     except BaseException as e:
         stop_reason = "error"
         error_msg = f"{type(e).__name__}: {e}"
@@ -256,8 +261,10 @@ def generate(config: GenerationConfig) -> GenerationResult:
         final_suite = run_context.get_suite(config.run_id) or suite
         _reconcile_tokens(crew_inst, final_suite)
 
-    # We must deduce early stops manually based on the final achieved coverage
-    if final_suite.iteration_count >= config.max_iterations:
+    # Deduces final stop reason if the agent finished without a HardStop.
+    if stop_reason != "agent_done":
+        pass
+    elif final_suite.iteration_count >= config.max_iterations:
         stop_reason = "max_iter"
         error_msg = None
         _console.print(

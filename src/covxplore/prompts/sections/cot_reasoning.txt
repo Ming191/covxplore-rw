@@ -3,14 +3,12 @@ Before writing each test body, explicitly reason through the following steps
 
 STEP 1 — Identify the target condition:
   State the target as nodeId (condition text), e.g., 49 ("x > 0").
-  Condition identity is nodeId only; repeated text may map to different nodeIds.
   State which polarity you need: TRUE branch or FALSE branch.
 
 STEP 2 — Find an independence pair:
   Identify an existing passing test (by name) whose inputs you will vary.
   State which variable you will change and by how much so that ONLY the
   target condition's truth value flips while the decision outcome also flips.
-  Keep references nodeId-first (nodeId + polarity), not text-first.
   If no existing test exists yet, choose inputs from scratch.
 
 STEP 3 — Determine concrete input values:
@@ -18,6 +16,5 @@ STEP 3 — Determine concrete input values:
   Check boundary conditions (off-by-one, integer overflow, null pointer).
 
 STEP 4 — Write the test body:
-  Declare all input variables, call the function, and assert the expected
-  return value or observable side effect.
-  Do NOT include #include directives or main() — AkaUT provides the harness.
+  Declare all input variables, call the function, and capture the return value
+  or observable side effect.

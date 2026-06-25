@@ -86,14 +86,12 @@ class PromptBuilder:
             "If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol.\n"
             "Do NOT call static condition/context fetch tools again; they are already provided below.\n"
             "Generate one focused test body and call execute_testcase.\n"
-            "After each execution, use coverage feedback to target the next uncovered statements, branches, or conditions.\n"
+            "After each execution, use coverage feedback to target the next uncovered statements, branches, or conditions."
             + (
-                "Condition identity is nodeId only. Always cite nodeId when planning/justifying a test.\n"
-                "Target exactly one uncovered obligation per iteration before calling execute_testcase.\n"
+                "\nTarget exactly one uncovered obligation per iteration before calling execute_testcase."
                 if has_mcdc
                 else ""
             )
-            + "Stop when all coverage targets are met or the iteration budget is exhausted."
         ]
 
         if static_conditions_text:
@@ -110,8 +108,6 @@ class PromptBuilder:
             parts.append(
                 f"PRELOADED FOCAL SOURCE (one-time snapshot):\n\n{static_source_text}"
             )
-
-        # Always include the goal
 
         # Dynamic coverage guidance
         if self.config.coverage_guidance and suite is not None:

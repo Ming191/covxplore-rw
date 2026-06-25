@@ -34,6 +34,53 @@ class FatalToolError(Exception):
     pass
 
 
+class HardStop(BaseException):
+    """Raised to terminate CrewAI loop when generation goal is reached."""
+
+    def __init__(self, reason: str, message: str = "") -> None:
+        super().__init__(message or reason)
+        self.reason = reason
+
+
+def _is_coverage_done(suite: TestSuite, mcdc_target: float) -> bool:
+    """Return True when all applicable coverage targets are satisfied."""
+    if suite.iteration_count == 0:
+        return False
+    metrics = suite.coverage.metrics(suite.tests)
+    if metrics.total_statements == 0 and metrics.total_branches == 0:
+        return False
+    mcdc_done = (
+        metrics.total_mcdc_pairs == 0
+        or metrics.mcdc_pct >= mcdc_target
+        or not suite.coverage.unvisited_summary()
+    )
+    stmt_done = (
+        metrics.total_statements == 0
+        or metrics.covered_statements >= metrics.total_statements
+    )
+    branch_done = (
+        metrics.total_branches == 0 or metrics.covered_branches >= metrics.total_branches
+    )
+    return mcdc_done and stmt_done and branch_done
+
+
+def _raise_if_hard_stop(suite: TestSuite, cfg: object) -> None:
+    """Raise HardStop immediately after redundant streak or coverage target."""
+    redundant_limit: int = getattr(cfg, "redundant_streak_limit", 3)
+    mcdc_target: float = getattr(cfg, "mcdc_target", 1.0)
+
+    if suite.coverage.consecutive_redundant >= redundant_limit:
+        raise HardStop(
+            "redundant_streak",
+            f"Hard stop: {redundant_limit} consecutive redundant tests — agent loop terminated.",
+        )
+    if _is_coverage_done(suite, mcdc_target):
+        raise HardStop(
+            "coverage_target",
+            "Hard stop: all coverage targets met — agent loop terminated.",
+        )
+
+
 @dataclass
 class RunContext:
     """Owns suites by explicit generation run id."""
@@ -236,6 +283,8 @@ class ExecuteTestcaseTool(BaseTool):
 
         if suite:
             suite.add_result(result, cfg.min_suite_size)
+            if result.status in {TestStatus.PASSED.value, TestStatus.RUNTIME_ERROR.value}:
+                _raise_if_hard_stop(suite, cfg)
 
         return _format_summary(result, suite, action_validation.warnings)
 

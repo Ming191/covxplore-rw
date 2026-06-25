@@ -2,11 +2,7 @@ generate_tests:
   description: >
     {task_description}
   expected_output: >
-    A series of execute_testcase tool calls that together cover as many
-    MC/DC condition polarities as possible within the iteration budget.
-    Only when all coverage targets are met, or you run out of iterations,
-    or the prompt explicitly instructs you that all targets are met,
-    you must output exactly one line:
+    A series of execute_testcase tool calls covering as many coverage
+    targets as possible. When done, output exactly:
     DONE: <n> tests generated, MC/DC=<pct>%
-    Do NOT output 'DONE:' early if there are still uncovered obligations!
   agent: test_generator

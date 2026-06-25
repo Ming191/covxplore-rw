@@ -16,3 +16,21 @@ debugs_*/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Auto-generated
+.covxplore/
+
+# Research / experiment temp files
+BASELINE_RESEARCH_GUIDE.md
+baseline_paths.txt
+baseline_paths_gcov_rerun.txt
+gtest_llvm_30fns.txt
+scripts/merge_gcov_rerun_into_v3.py
+scripts/rerun_gcov_opaque_branch_functions.sh
+
+# Dead/orphan gtest code (untracked, from gtest branch)
+src/covxplore/driver/gtest_executor.py
+src/covxplore/prompts/sections/*_gtest.txt
+
+# Test run outputs
+test_results/
