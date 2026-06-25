@@ -33,17 +33,27 @@ STUCK_ALL_ADVICE = "Do NOT continue issuing near-duplicate tests for these."
 STUCK_REPORT_HEADER = "Report likely instrumentation gap for the remaining nodeId/polarities:"
 STUCK_RATIONALE = "Rationale: opposite polarity was observed repeatedly, but this polarity never appears."
 STUCK_PARTIAL_HEADER = "Potentially stuck obligations (opposite polarity seen repeatedly):"
-STUCK_PARTIAL_ADVICE = "  Do not fixate on these first; cover other obligations, then retry with a different baseline/path."
+STUCK_PARTIAL_ADVICE = (
+    "  Do not fixate on these first; cover other obligations, then retry with a different baseline/path. "
+    "If stuck for 2+ attempts on the same condition, use search_nodes + get_node_source "
+    "to study the callee functions that gate this condition."
+)
 REDUNDANT_WARNING_3 = (
     "\nWARNING: 3+ consecutive redundant tests (0 new MC/DC pairs). "
-    "You are likely stuck at a local optimum. "
-    "Do NOT keep issuing near-duplicate tests. "
-    "Switch to a different nodeId family/branch structure. "
-    "If the next attempt is still redundant, output final DONE summary immediately to stop token waste."
+    "You are likely stuck at a local optimum — either a misunderstanding of the call chain "
+    "or an unreachable branch. "
+    "STOP generating tests immediately. Instead: "
+    "1) Use search_nodes to find helper functions called around the stuck condition. "
+    "2) Use get_node_source to read their source code. "
+    "3) Re-evaluate whether the targeted polarity is actually reachable from test inputs. "
+    "If still unreachable, move to a different nodeId family and output final DONE summary."
 )
 REDUNDANT_CAUTION_2 = (
-    "\nCAUTION: 2 consecutive redundant tests. Switch to a different baseline passing test and "
-    "drive a different code path for the targeted nodeId/polarity."
+    "\nCAUTION: 2 consecutive redundant tests. Do NOT patch the last test — step back and "
+    "study the callee/helper functions that affect control flow around the stuck condition. "
+    "Use search_nodes then get_node_source to fetch source for helper functions "
+    "(e.g., _readKeyname, _white, _next) that determine whether this condition can be reached. "
+    "Only generate a new test AFTER you understand the exact call chain."
 )
 TARGETING_ADVICE = (
     "\nTarget the test path that satisfies the highest number of conditions. "

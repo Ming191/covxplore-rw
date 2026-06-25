@@ -10,6 +10,7 @@ This module is app-only and carries no ablation/pipeline dependencies.
 from __future__ import annotations
 
 import re
+import os
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -18,13 +19,14 @@ from typing import Literal
 from rich.console import Console
 
 from covxplore.config import get_settings
+from covxplore.concolic.solver import Z3GuidanceSolver
 from covxplore.crew import build_crew
 from covxplore.llm_logger import LLMInteractionLogger
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.prompts.registry import get_variant
 from covxplore.status import TestStatus
 from covxplore.tools.execute_testcase import HardStop, RunContext
-from covxplore.types import TestSuite
+from covxplore.types import CoverageDetail, TestSuite
 
 _console = Console()
 
@@ -258,12 +260,23 @@ def generate(config: GenerationConfig) -> GenerationResult:
                 tracing_url = getattr(crew_inst.crew(), "_telemetry_url", None)
             except Exception:
                 pass
+        # Fallback: sum from LLM interaction log when CrewAI metrics not populated (e.g., HardStop)
+        if not crew_prompt_tokens:
+            crew_prompt_tokens = sum(
+                i["usage"].get("prompt_tokens", 0) for i in llm_logger.interactions
+            ) or None
+        if not crew_completion_tokens:
+            crew_completion_tokens = sum(
+                i["usage"].get("completion_tokens", 0) for i in llm_logger.interactions
+            ) or None
         final_suite = run_context.get_suite(config.run_id) or suite
         _reconcile_tokens(crew_inst, final_suite)
 
     # Deduces final stop reason if the agent finished without a HardStop.
     if stop_reason != "agent_done":
         pass
+    elif final_suite.coverage._hard_stop:
+        stop_reason = final_suite.coverage._hard_stop  # type: ignore[assignment]
     elif final_suite.iteration_count >= config.max_iterations:
         stop_reason = "max_iter"
         error_msg = None
@@ -317,6 +330,62 @@ def _coverage_target_reached(suite: TestSuite, config: GenerationConfig) -> bool
     return mcdc_done and stmt_done and branch_done
 
 
+def _pre_seed_z3(function_path: str, suite: TestSuite) -> None:
+    """Run Z3 constraint solver on static conditions and pre-seed tests."""
+    try:
+        from covxplore.concolic import pre_seed_z3_tests
+        from covxplore.api_client import AkaUTClient, AkaUTError
+        from covxplore.types import CoverageDetail, TestResult
+        from covxplore.config import get_settings
+
+        tests = pre_seed_z3_tests(function_path)
+        if not tests:
+            return
+
+        cfg = get_settings()
+        for t in tests:
+            try:
+                with AkaUTClient() as client:
+                    raw = client.execute_testcase(
+                        function_path, t["test_body"], t["test_name"]
+                    )
+                result = TestResult(
+                    test_name=t["test_name"],
+                    test_body=t["test_body"],
+                    status=raw.status,
+                    execute_log=raw.execute_log,
+                    statement_coverage=CoverageDetail(
+                        visited=raw.statement_coverage.get("visited", 0),
+                        total=raw.statement_coverage.get("total", 0),
+                        progress=raw.statement_coverage.get("progress", 0.0),
+                    ),
+                    branch_coverage=CoverageDetail(
+                        visited=raw.branch_coverage.get("visited", 0),
+                        total=raw.branch_coverage.get("total", 0),
+                        progress=raw.branch_coverage.get("progress", 0.0),
+                    ),
+                    mcdc_coverage=CoverageDetail(
+                        visited=raw.mcdc_coverage.get("visited", 0),
+                        total=raw.mcdc_coverage.get("total", 0),
+                        progress=raw.mcdc_coverage.get("progress", 0.0),
+                    ),
+                    target_node_id=t["node_id"],
+                    target_polarity=t["polarity"],
+                    target_reason=t["target_reason"],
+                )
+                suite.add_result(result, cfg.min_suite_size)
+                tag = "+1" if result.new_mcdc_pairs_covered else " 0"
+                _console.print(
+                    f"[dim]Z3 pre-seed: {t['test_name']} → {result.status} "
+                    f"(MC/DC {tag})[/]"
+                )
+            except AkaUTError as exc:
+                _console.print(f"[dim]Z3 pre-seed: {t['test_name']} → {exc}[/]")
+
+    except Exception as exc:
+        _console.print(f"[dim]Z3 pre-seed: init failed ({exc}), skipping[/]")
+
+
 def _prefetch_conditions(suite: TestSuite) -> None:
     """Call /api/node/conditions before kickoff to pre-populate total_mcdc_pairs.
 
@@ -339,12 +408,15 @@ def _prefetch_conditions(suite: TestSuite) -> None:
         _console.print(f"[yellow]Could not prefetch conditions: {exc}[/]")
 
 
-def _format_conditions_for_prompt(result) -> str:
+def _format_conditions_for_prompt(
+    result, solver: Z3GuidanceSolver | None = None
+) -> str:
     lines = [
         f"Found {result.total_conditions} conditions "
         f"({result.total_mcdc_pairs} MC/DC pairs to cover):",
         "",
     ]
+    solved_count = 0
     for i, c in enumerate(result.conditions, start=1):
         if c.node_id is None:
             raise RuntimeError(
@@ -356,6 +428,22 @@ def _format_conditions_for_prompt(result) -> str:
         end = c.end_offset if c.end_offset is not None else "?"
         lines.append(
             f"  {i}. [node:{c.node_id} line+{line}, offset {start}–{end}] {c.condition!r}"
+        )
+
+        # Z3 guidance: inject input hints for solvable conditions
+        if solver is not None and c.variables:
+            hint = solver.solve(c.condition, c.variables)
+            if hint is not None and hint.is_solvable:
+                lines.append(
+                    f"     Z3 hint: TRUE ← {hint.true_branch}"
+                    f"  |  FALSE ← {hint.false_branch}"
+                )
+                solved_count += 1
+
+    if solved_count > 0:
+        _console.print(
+            f"[dim]Z3 guidance: {solved_count}/{result.total_conditions} "
+            f"conditions annotated with solver hints[/]"
         )
     return "\n".join(lines)
 
@@ -370,7 +458,8 @@ def _prefetch_static_prompt_data(function_path: str) -> tuple[str, str, str]:
         ctx = client.get_function_context(function_path)
         src = client.get_node_source(function_path)
 
-    cond_text = _format_conditions_for_prompt(cond)
+    solver = None if os.environ.get("COVXPLORE_NO_Z3_HINTS") else Z3GuidanceSolver()
+    cond_text = _format_conditions_for_prompt(cond, solver=solver)
     ctx_text = ctx.context
     src_text = f"// Source: {function_path}\n{_number_lines(src.source)}"
     return cond_text, ctx_text, src_text

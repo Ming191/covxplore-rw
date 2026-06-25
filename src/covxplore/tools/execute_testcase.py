@@ -70,15 +70,9 @@ def _raise_if_hard_stop(suite: TestSuite, cfg: object) -> None:
     mcdc_target: float = getattr(cfg, "mcdc_target", 1.0)
 
     if suite.coverage.consecutive_redundant >= redundant_limit:
-        raise HardStop(
-            "redundant_streak",
-            f"Hard stop: {redundant_limit} consecutive redundant tests — agent loop terminated.",
-        )
+        suite.coverage._hard_stop = "redundant_streak"
     if _is_coverage_done(suite, mcdc_target):
-        raise HardStop(
-            "coverage_target",
-            "Hard stop: all coverage targets met — agent loop terminated.",
-        )
+        suite.coverage._hard_stop = "coverage_target"
 
 
 @dataclass
@@ -140,6 +134,13 @@ class ExecuteTestcaseTool(BaseTool):
     ) -> str:
         cfg = get_settings()
         suite = self._run_context.get_suite(run_id)
+
+        # Block new tests if hard-stop already triggered
+        if suite and suite.coverage._hard_stop:
+            return (
+                f"Hard stop active ({suite.coverage._hard_stop}). "
+                "No more tests accepted. Output final DONE summary immediately."
+            )
 
         action_validation = validate_tool_input(
             {
@@ -332,6 +333,13 @@ def _format_summary(
     lines = []
     redundant_tag = " [REDUNDANT — 0 new MC/DC pairs]" if result.is_redundant else ""
     lines.append(f"===  {result.test_name} | {result.status}{redundant_tag} ===")
+    if result.is_redundant and suite and suite.coverage.consecutive_redundant >= 2:
+        lines.append(
+            "STOP patching — study the call chain first. "
+            "Use search_nodes then get_node_source to read helper/callee functions "
+            "(e.g., _readKeyname, _white, _next) that gate the stuck condition. "
+            "Do NOT submit another test until you understand the exact control flow."
+        )
     s = result.statement_coverage
     b = result.branch_coverage
     m = result.mcdc_coverage

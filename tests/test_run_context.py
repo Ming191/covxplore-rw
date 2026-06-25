@@ -266,12 +266,11 @@ class TestExecuteTestcaseToolRobustResponses:
         )
         _FakeExecutor.error = None
 
-        with pytest.raises(HardStop) as exc:
-            ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
-                "run-1", "/x.cpp::f()", "f();", "t1"
-            )
+        ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            "run-1", "/x.cpp::f()", "f();", "t1"
+        )
 
-        assert exc.value.reason == "coverage_target"
+        assert suite.coverage._hard_stop == "coverage_target"
         assert len(suite.tests) == 1
 
     def test_tool_hard_stops_on_redundant_streak(self, monkeypatch):
@@ -279,6 +278,11 @@ class TestExecuteTestcaseToolRobustResponses:
         suite = ctx.reset_suite("/x.cpp::f()", "run-1")
         suite.coverage.total_mcdc_pairs = 2
         suite.coverage.consecutive_redundant = 2
+        # Seed conditions to avoid GapAnalyzer crash
+        suite.coverage.seed_conditions(
+            [type("C", (), {"node_id": 1, "condition": "x > 0", "line_in_function": 1, "start_offset": 0, "end_offset": 0, "variables": {}})()],
+            2,
+        )
 
         settings = type(
             "Settings",
@@ -286,8 +290,6 @@ class TestExecuteTestcaseToolRobustResponses:
             {"min_suite_size": 0, "redundant_streak_limit": 3, "mcdc_target": 1.0},
         )()
         monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
-        # Omit statement/branch coverage so _total_statements/_total_branches stay 0
-        # and _is_coverage_done returns False (guard triggers).
         _FakeExecutor.response = ExecuteResult(
             raw={
                 "testName": "t1",
@@ -296,12 +298,11 @@ class TestExecuteTestcaseToolRobustResponses:
         )
         _FakeExecutor.error = None
 
-        with pytest.raises(HardStop) as exc:
-            ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
-                "run-1", "/x.cpp::f()", "f();", "t1"
-            )
+        ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            "run-1", "/x.cpp::f()", "f();", "t1"
+        )
 
-        assert exc.value.reason == "redundant_streak"
+        assert suite.coverage._hard_stop == "redundant_streak"
         assert suite.coverage.consecutive_redundant == 3
 
 

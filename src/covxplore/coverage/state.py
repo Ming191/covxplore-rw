@@ -48,6 +48,10 @@ class CoverageState:
     consecutive_redundant: int = 0
     """Counter of back-to-back redundant tests; reset on progress."""
 
+    _hard_stop: str = ""
+    """If non-empty, reason for hard stop (redundant_streak / coverage_target).
+    Checked by generator after crew.kickoff() returns to set final stop_reason."""
+
     @property
     def has_mcdc(self) -> bool:
         """Whether the function under test has MC/DC conditions."""

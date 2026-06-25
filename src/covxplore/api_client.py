@@ -42,6 +42,7 @@ class ConditionInfo:
     line_in_function: int | None
     start_offset: int | None
     end_offset: int | None
+    variables: dict[str, str] | None = None
 
 
 @dataclass
@@ -49,6 +50,8 @@ class ConditionsResult:
     absolute_path: str
     total_conditions: int
     conditions: list[ConditionInfo]
+    return_type: str | None = None
+    parameters: list[dict[str, str]] | None = None
 
     @property
     def total_mcdc_pairs(self) -> int:
@@ -191,6 +194,8 @@ class AkaUTClient:
         return ConditionsResult(
             absolute_path=data["absolutePath"],
             total_conditions=data["totalConditions"],
+            return_type=data.get("returnType"),
+            parameters=data.get("parameters"),
             conditions=[
                 ConditionInfo(
                     node_id=c.get("nodeId"),
@@ -198,6 +203,7 @@ class AkaUTClient:
                     line_in_function=c.get("lineInFunction"),
                     start_offset=c.get("startOffset"),
                     end_offset=c.get("endOffset"),
+                    variables=c.get("variables"),
                 )
                 for c in (data.get("conditions") or [])
             ],
