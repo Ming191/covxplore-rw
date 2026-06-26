@@ -32,6 +32,11 @@ class RetryingLLM(LLM):
         object.__setattr__(self, "_retry_backoff_sec", max(0.0, float(retry_backoff_sec)))
 
     def call(self, *args: Any, **kwargs: Any) -> Any:
+        # These are RetryingLLM-only controls. CrewAI may echo custom LLM
+        # attributes into call kwargs; do not let them leak into LiteLLM/OpenAI.
+        kwargs.pop("empty_retries", None)
+        kwargs.pop("retry_backoff_sec", None)
+
         attempts = self._empty_retries + 1
         result: Any = None
         for attempt in range(1, attempts + 1):
@@ -81,6 +86,4 @@ def build_llm(model: str | None = None) -> RetryingLLM:
         base_url=cfg.deepseek_base_url,
         max_tokens=cfg.max_tokens,
         temperature=cfg.llm_temperature,
-        empty_retries=cfg.llm_empty_retries,
-        retry_backoff_sec=cfg.llm_retry_backoff_sec,
     )

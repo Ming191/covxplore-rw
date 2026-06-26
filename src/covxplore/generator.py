@@ -13,29 +13,26 @@ import re
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Literal
 
 from rich.console import Console
 
 from covxplore.config import get_settings
-from covxplore.crew import build_crew
+from covxplore.generation.prompt_context import (
+    fetch_static_prompt_data,
+    seed_suite_conditions,
+)
+from covxplore.generation.stop_reasons import (
+    StopReason,
+    coverage_target_reached,
+    deduce_agent_done_stop_reason,
+)
+from covxplore.generation.tokens import choose_run_token_totals, reconcile_suite_tokens
 from covxplore.llm_logger import LLMInteractionLogger
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.prompts.registry import get_variant
-from covxplore.status import TestStatus
-from covxplore.tools.execute_testcase import HardStop, RunContext
 from covxplore.types import TestSuite
 
 _console = Console()
-
-StopReason = Literal[
-    "max_iter",
-    "coverage_target",
-    "redundant_streak",
-    "agent_done",
-    "error",
-]
-
 
 @dataclass
 class GenerationConfig:
@@ -180,6 +177,9 @@ class GenerationResult:
 
 def generate(config: GenerationConfig) -> GenerationResult:
     """Execute a single generation run end-to-end."""
+    from covxplore.crew import build_crew
+    from covxplore.tools.execute_testcase import HardStop, RunContext
+
     cfg = get_settings()
     assert config.run_id is not None
     prompt_config = get_variant(config.prompt_variant)
@@ -192,7 +192,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
     run_context = RunContext()
 
     suite: TestSuite = run_context.reset_suite(config.function_path, config.run_id)
-    _prefetch_conditions(suite)
+    seed_suite_conditions(suite, _console)
 
     if not suite.coverage.has_mcdc:
         _console.print(
@@ -208,9 +208,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
     llm_logger = LLMInteractionLogger()
 
     try:
-        static_conditions_text, static_context_text, static_source_text = (
-            _prefetch_static_prompt_data(config.function_path)
-        )
+        static_prompt_data = fetch_static_prompt_data(config.function_path)
         crew_inst, builder = build_crew(
             prompt_config=prompt_config,
             max_iterations=config.max_iterations,
@@ -224,9 +222,9 @@ def generate(config: GenerationConfig) -> GenerationResult:
                 run_id=config.run_id,
                 suite=suite,
                 remaining_iterations=config.max_iterations,
-                static_conditions_text=static_conditions_text,
-                static_context_text=static_context_text,
-                static_source_text=static_source_text,
+                static_conditions_text=static_prompt_data.conditions_text,
+                static_context_text=static_prompt_data.context_text,
+                static_source_text=static_prompt_data.source_text,
             ),
         }
         crew_obj = crew_inst.crew()
@@ -246,40 +244,36 @@ def generate(config: GenerationConfig) -> GenerationResult:
 
     finally:
         llm_logger.detach()
+        token_totals = choose_run_token_totals(crew_inst, llm_logger)
+        if token_totals.total > 0:
+            crew_prompt_tokens = token_totals.prompt
+            crew_completion_tokens = token_totals.completion
         if crew_inst is not None:
-            try:
-                metrics = crew_inst.crew().usage_metrics
-                if metrics:
-                    crew_prompt_tokens = metrics.prompt_tokens
-                    crew_completion_tokens = metrics.completion_tokens
-            except Exception:
-                pass
             try:
                 tracing_url = getattr(crew_inst.crew(), "_telemetry_url", None)
             except Exception:
                 pass
         final_suite = run_context.get_suite(config.run_id) or suite
-        _reconcile_tokens(crew_inst, final_suite)
+        reconcile_suite_tokens(final_suite, token_totals)
 
     # Deduces final stop reason if the agent finished without a HardStop.
     if stop_reason != "agent_done":
         pass
-    elif final_suite.iteration_count >= config.max_iterations:
-        stop_reason = "max_iter"
-        error_msg = None
-        _console.print(
-            f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]"
-        )
-    elif final_suite.coverage.consecutive_redundant >= config.redundant_streak_limit:
-        stop_reason = "redundant_streak"
-        error_msg = None
-        _console.print(
-            f"[yellow]Stopped: {config.redundant_streak_limit} consecutive redundant tests[/]"
-        )
-    elif _coverage_target_reached(final_suite, config):
-        stop_reason = "coverage_target"
-        error_msg = None
-        _console.print("[green]Stopped gracefully: reached coverage target[/]")
+    else:
+        stop_reason = deduce_agent_done_stop_reason(final_suite, config)
+        if stop_reason == "max_iter":
+            error_msg = None
+            _console.print(
+                f"[yellow]Stopped gracefully: max_iter after {final_suite.iteration_count} iterations[/]"
+            )
+        elif stop_reason == "redundant_streak":
+            error_msg = None
+            _console.print(
+                f"[yellow]Stopped: {config.redundant_streak_limit} consecutive redundant tests[/]"
+            )
+        elif stop_reason == "coverage_target":
+            error_msg = None
+            _console.print("[green]Stopped gracefully: reached coverage target[/]")
 
     result = GenerationResult(
         config=config,
@@ -297,116 +291,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
     return result
 
 
-def _coverage_target_reached(suite: TestSuite, config: GenerationConfig) -> bool:
-    """Return True when all applicable coverage targets are satisfied."""
-    if suite.iteration_count == 0:
-        return False
-    metrics = suite.coverage.metrics(suite.tests)
-    mcdc_done = (
-        metrics.total_mcdc_pairs == 0
-        or metrics.mcdc_pct >= config.mcdc_target
-        or not suite.coverage.unvisited_summary()
-    )
-    stmt_done = (
-        metrics.total_statements == 0
-        or metrics.covered_statements >= metrics.total_statements
-    )
-    branch_done = (
-        metrics.total_branches == 0 or metrics.covered_branches >= metrics.total_branches
-    )
-    return mcdc_done and stmt_done and branch_done
-
-
-def _prefetch_conditions(suite: TestSuite) -> None:
-    """Call /api/node/conditions before kickoff to pre-populate total_mcdc_pairs.
-
-    This ensures stop-reason deduction is correct even when all generated tests
-    fail to compile (otherwise total_mcdc_pairs stays 0 and the run is
-    falsely marked as coverage_target).
-    """
-    from covxplore.api_client import AkaUTClient, AkaUTError
-
-    try:
-        with AkaUTClient() as client:
-            result = client.get_node_conditions(suite.function_path)
-        if result.total_mcdc_pairs > 0:
-            suite.coverage.seed_conditions(result.conditions, result.total_mcdc_pairs)
-            _console.print(
-                f"[dim]Static CFG: {result.total_conditions} conditions "
-                f"({result.total_mcdc_pairs} MC/DC pairs)[/]"
-            )
-    except AkaUTError as exc:
-        _console.print(f"[yellow]Could not prefetch conditions: {exc}[/]")
-
-
-def _format_conditions_for_prompt(result) -> str:
-    lines = [
-        f"Found {result.total_conditions} conditions "
-        f"({result.total_mcdc_pairs} MC/DC pairs to cover):",
-        "",
-    ]
-    for i, c in enumerate(result.conditions, start=1):
-        if c.node_id is None:
-            raise RuntimeError(
-                "Backend payload missing nodeId in /api/node/conditions. "
-                "nodeId is required for MC/DC identity."
-            )
-        line = c.line_in_function if c.line_in_function is not None else "?"
-        start = c.start_offset if c.start_offset is not None else "?"
-        end = c.end_offset if c.end_offset is not None else "?"
-        lines.append(
-            f"  {i}. [node:{c.node_id} line+{line}, offset {start}–{end}] {c.condition!r}"
-        )
-    return "\n".join(lines)
-
-
-def _prefetch_static_prompt_data(function_path: str) -> tuple[str, str, str]:
-    """Fetch static data once and return prompt-ready text blocks."""
-    from covxplore.api_client import AkaUTClient
-    from covxplore.tools.get_source import _number_lines
-
-    with AkaUTClient() as client:
-        cond = client.get_node_conditions(function_path)
-        ctx = client.get_function_context(function_path)
-        src = client.get_node_source(function_path)
-
-    cond_text = _format_conditions_for_prompt(cond)
-    ctx_text = ctx.context
-    src_text = f"// Source: {function_path}\n{_number_lines(src.source)}"
-    return cond_text, ctx_text, src_text
-
-
-def _reconcile_tokens(crew_inst, suite: TestSuite) -> None:
-    """Fallback token attribution after kickoff() completes.
-
-    Distributes the overall metrics.prompt_tokens and metrics.completion_tokens
-    evenly across all PASSED/RUNTIME_ERROR tests in the suite.
-    """
-    if crew_inst is None:
-        return
-    if suite.total_input_tokens > 0 or suite.total_output_tokens > 0:
-        return
-    try:
-        metrics = crew_inst.crew().usage_metrics
-        total_prompt = getattr(metrics, "prompt_tokens", 0) or 0
-        total_completion = getattr(metrics, "completion_tokens", 0) or 0
-    except Exception:
-        return
-    if total_prompt == 0 and total_completion == 0:
-        return
-    eligible = [
-        t
-        for t in suite.tests
-        if t.status in {TestStatus.PASSED.value, TestStatus.RUNTIME_ERROR.value}
-    ]
-    if not eligible:
-        return
-    n = len(eligible)
-    base_in, rem_in = divmod(total_prompt, n)
-    base_out, rem_out = divmod(total_completion, n)
-    for i, t in enumerate(eligible):
-        t.token_input = base_in + (rem_in if i == n - 1 else 0)
-        t.token_output = base_out + (rem_out if i == n - 1 else 0)
+_coverage_target_reached = coverage_target_reached
 
 
 def _print_result_summary(r: GenerationResult) -> None:
