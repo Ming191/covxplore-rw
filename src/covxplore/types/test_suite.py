@@ -47,6 +47,15 @@ class TestSuite:
     def non_redundant_tests(self) -> list[TestResult]:
         return [t for t in self.tests if not t.is_redundant]
 
+    def consecutive_failures(self) -> int:
+        """Count consecutive non-passing tests from the end of the suite."""
+        count = 0
+        for t in reversed(self.tests):
+            if t.status == "PASSED":
+                break
+            count += 1
+        return count
+
     def to_dict(self) -> dict:
         metrics = self.coverage.metrics(self.tests)
         return {

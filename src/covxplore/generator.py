@@ -45,6 +45,9 @@ class GenerationConfig:
     redundant_streak_limit: int = field(
         default_factory=lambda: get_settings().redundant_streak_limit
     )
+    fail_streak_limit: int = field(
+        default_factory=lambda: get_settings().fail_streak_limit
+    )
     run_id: str | None = None
 
     def __post_init__(self):
@@ -274,6 +277,12 @@ def generate(config: GenerationConfig) -> GenerationResult:
         elif stop_reason == "coverage_target":
             error_msg = None
             _console.print("[green]Stopped gracefully: reached coverage target[/]")
+        elif stop_reason == "fail_streak":
+            error_msg = None
+            fail_limit: int = getattr(config, "fail_streak_limit", 5)
+            _console.print(
+                f"[red]Hard stop: {fail_limit} consecutive failing tests[/]"
+            )
 
     result = GenerationResult(
         config=config,

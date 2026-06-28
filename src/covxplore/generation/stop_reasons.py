@@ -7,6 +7,7 @@ StopReason = Literal[
     "max_iter",
     "coverage_target",
     "redundant_streak",
+    "fail_streak",
     "agent_done",
     "error",
 ]
@@ -37,6 +38,9 @@ def deduce_agent_done_stop_reason(suite, config) -> StopReason:
         return "max_iter"
     if suite.coverage.consecutive_redundant >= config.redundant_streak_limit:
         return "redundant_streak"
+    fail_limit: int = getattr(config, "fail_streak_limit", 5)
+    if suite.consecutive_failures() >= fail_limit:
+        return "fail_streak"
     if coverage_target_reached(suite, config):
         return "coverage_target"
     return "agent_done"

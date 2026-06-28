@@ -65,14 +65,20 @@ def _is_coverage_done(suite: TestSuite, mcdc_target: float) -> bool:
 
 
 def _raise_if_hard_stop(suite: TestSuite, cfg: object) -> None:
-    """Raise HardStop immediately after redundant streak or coverage target."""
+    """Raise HardStop immediately after redundant streak, fail streak, or coverage target."""
     redundant_limit: int = getattr(cfg, "redundant_streak_limit", 3)
+    fail_limit: int = getattr(cfg, "fail_streak_limit", 5)
     mcdc_target: float = getattr(cfg, "mcdc_target", 1.0)
 
     if suite.coverage.consecutive_redundant >= redundant_limit:
         raise HardStop(
             "redundant_streak",
             f"Hard stop: {redundant_limit} consecutive redundant tests — agent loop terminated.",
+        )
+    if suite.consecutive_failures() >= fail_limit:
+        raise HardStop(
+            "fail_streak",
+            f"Hard stop: {fail_limit} consecutive failing tests — agent loop terminated.",
         )
     if _is_coverage_done(suite, mcdc_target):
         raise HardStop(
@@ -283,8 +289,7 @@ class ExecuteTestcaseTool(BaseTool):
 
         if suite:
             suite.add_result(result, cfg.min_suite_size)
-            if result.status in {TestStatus.PASSED.value, TestStatus.RUNTIME_ERROR.value}:
-                _raise_if_hard_stop(suite, cfg)
+            _raise_if_hard_stop(suite, cfg)
 
         return _format_summary(result, suite, action_validation.warnings)
 
