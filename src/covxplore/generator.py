@@ -48,6 +48,9 @@ class GenerationConfig:
     fail_streak_limit: int = field(
         default_factory=lambda: get_settings().fail_streak_limit
     )
+    agent_retry_limit: int = field(
+        default_factory=lambda: get_settings().agent_retry_limit
+    )
     run_id: str | None = None
 
     def __post_init__(self):
@@ -212,27 +215,47 @@ def generate(config: GenerationConfig) -> GenerationResult:
 
     try:
         static_prompt_data = fetch_static_prompt_data(config.function_path)
-        crew_inst, builder = build_crew(
-            prompt_config=prompt_config,
-            max_iterations=config.max_iterations,
-            run_context=run_context,
-        )
-        assert isinstance(builder, PromptBuilder)
-        inputs = {
-            "agent_backstory": builder.system_prompt(),
-            "task_description": builder.task_description(
-                function_path=config.function_path,
-                run_id=config.run_id,
-                suite=suite,
-                remaining_iterations=config.max_iterations,
-                static_conditions_text=static_prompt_data.conditions_text,
-                static_context_text=static_prompt_data.context_text,
-                static_source_text=static_prompt_data.source_text,
-            ),
-        }
-        crew_obj = crew_inst.crew()
-        llm_logger.attach()
-        crew_obj.kickoff(inputs=inputs)
+        max_retries = config.agent_retry_limit
+
+        for retry_attempt in range(max_retries + 1):
+            crew_inst, builder = build_crew(
+                prompt_config=prompt_config,
+                max_iterations=config.max_iterations,
+                run_context=run_context,
+            )
+            assert isinstance(builder, PromptBuilder)
+            inputs = {
+                "agent_backstory": builder.system_prompt(),
+                "task_description": builder.task_description(
+                    function_path=config.function_path,
+                    run_id=config.run_id,
+                    suite=suite,
+                    remaining_iterations=config.max_iterations,
+                    static_conditions_text=static_prompt_data.conditions_text,
+                    static_context_text=static_prompt_data.context_text,
+                    static_source_text=static_prompt_data.source_text,
+                ),
+            }
+            crew_obj = crew_inst.crew()
+            llm_logger.attach()
+            crew_obj.kickoff(inputs=inputs)
+            llm_logger.detach()
+
+            current_suite = run_context.get_suite(config.run_id) or suite
+            if len(current_suite.tests) > 0:
+                break  # agent produced at least one test
+
+            if retry_attempt < max_retries:
+                _console.print(
+                    f"[yellow]Agent returned 0 tests "
+                    f"(attempt {retry_attempt + 1}/{max_retries + 1}); "
+                    f"retrying with fresh agent context...[/]"
+                )
+            else:
+                _console.print(
+                    f"[red]Agent returned 0 tests after {max_retries + 1} attempts; "
+                    f"giving up.[/]"
+                )
 
     except HardStop as e:
         stop_reason = e.reason  # type: ignore[assignment]
