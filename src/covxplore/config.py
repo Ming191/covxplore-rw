@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     min_suite_size: int = 1  # keep at least this many tests even if redundant
     redundant_streak_limit: int = 3  # early-stop after N consecutive redundant tests
     fail_streak_limit: int = 5  # early-stop after N consecutive failing tests (0 passing)
+    agent_retry_limit: int = 2  # retry entire agent loop if it returns 0 tests
     request_timeout_sec: int = 120  # per REST call
     compact_feedback: bool = Field(
         False,
