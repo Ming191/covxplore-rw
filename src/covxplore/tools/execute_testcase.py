@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -92,17 +93,30 @@ class RunContext:
     """Owns suites by explicit generation run id."""
 
     _suites: dict[str, TestSuite] = field(default_factory=dict)
+    _allowed_targets: dict[str, set[tuple[int, str]]] = field(default_factory=dict)
 
     def get_suite(self, run_id: str) -> TestSuite | None:
         return self._suites.get(run_id)
 
+    def allowed_targets(self, run_id: str) -> set[tuple[int, str]] | None:
+        return self._allowed_targets.get(run_id)
+
+    def set_allowed_targets(self, run_id: str, targets: list[dict]) -> None:
+        self._allowed_targets[run_id] = {
+            (target["node_id"], target["polarity"])
+            for target in targets
+            if target["node_id"] is not None
+        }
+
     def reset_suite(self, function_path: str, run_id: str) -> TestSuite:
         suite = TestSuite(function_path=function_path)
         self._suites[run_id] = suite
+        self._allowed_targets.pop(run_id, None)
         return suite
 
     def cleanup_suite(self, run_id: str) -> None:
         self._suites.pop(run_id, None)
+        self._allowed_targets.pop(run_id, None)
 
 
 class ExecuteTestcaseTool(BaseTool):
@@ -163,6 +177,25 @@ class ExecuteTestcaseTool(BaseTool):
                 f"- {error}" for error in action_validation.errors
             )
 
+        top_targets = getattr(cfg, "compact_feedback_top_targets", 3)
+        if getattr(cfg, "compact_feedback", False):
+            allowed_targets = self._run_context.allowed_targets(run_id)
+            requested_target = (
+                (target_node_id, target_polarity.upper())
+                if target_node_id is not None and target_polarity is not None
+                else None
+            )
+            if allowed_targets is not None and requested_target not in allowed_targets:
+                return _format_target_not_allowed(
+                    target_node_id,
+                    target_polarity,
+                    _next_targets(
+                        TestResult(test_name="", test_body="", status="UNKNOWN"),
+                        suite,
+                        top_targets,
+                    ),
+                )
+
         violations = self._validator.validate(test_body)
         errors = [violation for violation in violations if violation.severity == "ERROR"]
         if errors:
@@ -179,6 +212,10 @@ class ExecuteTestcaseTool(BaseTool):
             )
             if suite:
                 suite.add_result(failed, cfg.min_suite_size)
+            if getattr(cfg, "compact_feedback", False):
+                next_targets = _next_targets(failed, suite, top_targets)
+                self._run_context.set_allowed_targets(run_id, next_targets)
+                return _format_compact_summary(failed, suite, [], top_targets, next_targets)
             return (
                 "[CONTRACT_ERROR] execute_testcase rejected test body before execution:\n"
                 f"{_format_contract_violations(violations)}\n"
@@ -204,6 +241,10 @@ class ExecuteTestcaseTool(BaseTool):
                 )
                 if suite:
                     suite.add_result(failed, cfg.min_suite_size)
+                if getattr(cfg, "compact_feedback", False):
+                    next_targets = _next_targets(failed, suite, top_targets)
+                    self._run_context.set_allowed_targets(run_id, next_targets)
+                    return _format_compact_summary(failed, suite, [], top_targets, next_targets)
                 return (
                     f"[COMPILE_ERROR] execute_testcase failed: {exc}\n"
                     "Review the test body for syntax errors, missing includes, or "
@@ -287,10 +328,23 @@ class ExecuteTestcaseTool(BaseTool):
             target_reason=target_reason,
         )
 
+        next_targets = None
         if suite:
             suite.add_result(result, cfg.min_suite_size)
+            if getattr(cfg, "compact_feedback", False):
+                next_targets = _next_targets(result, suite, top_targets)
             _raise_if_hard_stop(suite, cfg)
 
+        if getattr(cfg, "compact_feedback", False):
+            next_targets = next_targets or _next_targets(result, suite, top_targets)
+            self._run_context.set_allowed_targets(run_id, next_targets)
+            return _format_compact_summary(
+                result,
+                suite,
+                action_validation.warnings,
+                top_targets,
+                next_targets,
+            )
         return _format_summary(result, suite, action_validation.warnings)
 
 
@@ -327,6 +381,283 @@ def _parse_trace_summary(raw: dict | None) -> TraceSummary | None:
 
 def _sort_value(value: object) -> tuple[bool, str]:
     return value is None, str(value)
+
+
+def _target_hit(result: TestResult) -> bool | None:
+    if result.target_node_id is None or result.target_polarity is None:
+        return None
+    want_true = result.target_polarity.upper() == "TRUE"
+    for entry in result.condition_trace:
+        if entry.node_id != result.target_node_id:
+            continue
+        return entry.true_branch_visited if want_true else entry.false_branch_visited
+    return False
+
+
+def _target_attempts(suite: TestSuite | None, node_id: int | None, polarity: str) -> tuple[int, int]:
+    if suite is None or node_id is None:
+        return 0, 0
+    attempts = 0
+    misses = 0
+    wanted = polarity.upper()
+    for test in suite.tests:
+        if test.target_node_id == node_id and (test.target_polarity or "").upper() == wanted:
+            attempts += 1
+            if _target_hit(test) is False:
+                misses += 1
+    return attempts, misses
+
+
+def _last_target_redundant(suite: TestSuite | None, node_id: int | None, polarity: str) -> bool:
+    if suite is None or node_id is None:
+        return False
+    wanted = polarity.upper()
+    for test in reversed(suite.tests):
+        if test.target_node_id == node_id and (test.target_polarity or "").upper() == wanted:
+            return test.is_redundant
+    return False
+
+
+def _target_score(target: dict, suite: TestSuite | None) -> int:
+    base = 100 if target["kind"] == "mcdc" else 40
+    attempts = int(target["attempts"])
+    misses = int(target["misses"])
+    redundant_penalty = 100 if _last_target_redundant(
+        suite, target["node_id"], target["polarity"]
+    ) else 0
+    return base - 25 * attempts - 60 * misses - redundant_penalty
+
+
+def _next_targets(
+    result: TestResult,
+    suite: TestSuite | None,
+    limit: int,
+) -> list[dict]:
+    targets = []
+    if suite is not None:
+        for item in suite.coverage.unvisited_summary():
+            node_id = item["condition_id"]
+            condition = item["condition"]
+            if item["needs_true"]:
+                attempts, misses = _target_attempts(suite, node_id, "TRUE")
+                targets.append(
+                    {
+                        "node_id": node_id,
+                        "polarity": "TRUE",
+                        "kind": "mcdc",
+                        "condition": condition,
+                        "attempts": attempts,
+                        "misses": misses,
+                    }
+                )
+            if item["needs_false"]:
+                attempts, misses = _target_attempts(suite, node_id, "FALSE")
+                targets.append(
+                    {
+                        "node_id": node_id,
+                        "polarity": "FALSE",
+                        "kind": "mcdc",
+                        "condition": condition,
+                        "attempts": attempts,
+                        "misses": misses,
+                    }
+                )
+    else:
+        for item in result.unvisited_mcdc:
+            if not item.true_branch_visited:
+                attempts, misses = _target_attempts(suite, item.node_id, "TRUE")
+                targets.append(
+                    {
+                        "node_id": item.node_id,
+                        "polarity": "TRUE",
+                        "kind": "mcdc",
+                        "condition": item.condition,
+                        "attempts": attempts,
+                        "misses": misses,
+                    }
+                )
+            if not item.false_branch_visited:
+                attempts, misses = _target_attempts(suite, item.node_id, "FALSE")
+                targets.append(
+                    {
+                        "node_id": item.node_id,
+                        "polarity": "FALSE",
+                        "kind": "mcdc",
+                        "condition": item.condition,
+                        "attempts": attempts,
+                        "misses": misses,
+                    }
+                )
+    for item in result.unvisited_branches:
+        if not item.true_visited:
+            attempts, misses = _target_attempts(suite, item.node_id, "TRUE")
+            targets.append(
+                {
+                    "node_id": item.node_id,
+                    "polarity": "TRUE",
+                    "kind": "branch",
+                    "condition": item.condition,
+                    "attempts": attempts,
+                    "misses": misses,
+                }
+            )
+        if not item.false_visited:
+            attempts, misses = _target_attempts(suite, item.node_id, "FALSE")
+            targets.append(
+                {
+                    "node_id": item.node_id,
+                    "polarity": "FALSE",
+                    "kind": "branch",
+                    "condition": item.condition,
+                    "attempts": attempts,
+                    "misses": misses,
+                }
+            )
+    mcdc_targets = [target for target in targets if target["kind"] == "mcdc"]
+    if mcdc_targets:
+        targets = mcdc_targets
+    targets.sort(
+        key=lambda target: (
+            -_target_score(target, suite),
+            target["misses"],
+            target["attempts"],
+            target["node_id"] is None,
+            target["node_id"] or 0,
+            target["polarity"] == "FALSE",
+        )
+    )
+    return targets[: max(0, limit)]
+
+
+def _first_blocker(result: TestResult) -> dict | None:
+    if _target_hit(result) is not False:
+        return None
+    for entry in result.condition_trace:
+        if entry.node_id == result.target_node_id:
+            break
+        if not entry.true_branch_visited:
+            return {
+                "node_id": entry.node_id,
+                "condition": entry.condition,
+                "needed": "TRUE",
+            }
+        if not entry.false_branch_visited:
+            return {
+                "node_id": entry.node_id,
+                "condition": entry.condition,
+                "needed": "FALSE",
+            }
+    return None
+
+
+def _trace_chain(result: TestResult, limit: int = 12) -> list[dict]:
+    chain = []
+    for entry in result.condition_trace[:limit]:
+        chain.append(
+            {
+                "node_id": entry.node_id,
+                "condition": entry.condition,
+                "true": entry.true_branch_visited,
+                "false": entry.false_branch_visited,
+            }
+        )
+    return chain
+
+
+def _target_miss_context(result: TestResult, suite: TestSuite | None) -> dict | None:
+    if _target_hit(result) is not False:
+        return None
+    attempts, misses = _target_attempts(
+        suite, result.target_node_id, result.target_polarity or ""
+    )
+    if misses < 2:
+        return None
+    return {
+        "attempts": attempts,
+        "misses": misses,
+        "trace_chain": _trace_chain(result),
+        "repair_hint": "This target missed repeatedly. Do not retry the same input shape. First satisfy first_blocker, then drive the target polarity.",
+    }
+
+
+def _format_target_not_allowed(
+    node_id: int | None,
+    polarity: str | None,
+    next_targets: list[dict],
+) -> str:
+    return json.dumps(
+        {
+            "status": "TARGET_NOT_ALLOWED",
+            "target": {"node_id": node_id, "polarity": polarity},
+            "message": "Use one of next_targets exactly; stale or missing targets are not executed.",
+            "next_targets": next_targets,
+        },
+        separators=(",", ":"),
+    )
+
+
+def _compact_log(result: TestResult, limit: int = 500) -> dict | None:
+    if not is_failure_status(result.status) or not result.execute_log:
+        return None
+    log = result.execute_log.strip()
+    lower = log.lower()
+    category = "failure"
+    if "compile" in lower or "error:" in lower:
+        category = "compile_error"
+    elif "runtime" in lower or "segmentation" in lower or "exception" in lower:
+        category = "runtime_error"
+    return {"category": category, "excerpt": log[:limit]}
+
+
+def _format_compact_summary(
+    result: TestResult,
+    suite: TestSuite | None,
+    action_warnings: list[str] | None = None,
+    top_targets: int = 3,
+    next_targets: list[dict] | None = None,
+) -> str:
+    metrics = suite.coverage.metrics(suite.tests) if suite is not None else None
+    payload = {
+        "status": result.status,
+        "test_name": result.test_name,
+        "new_mcdc_pairs": result.new_mcdc_pairs_covered,
+        "redundant": result.is_redundant,
+        "target": None,
+        "suite": {
+            "iteration": suite.iteration_count if suite else result.iteration,
+            "statement": (
+                f"{metrics.covered_statements}/{metrics.total_statements}"
+                if metrics is not None
+                else f"{result.statement_coverage.visited}/{result.statement_coverage.total}"
+            ),
+            "branch": (
+                f"{metrics.covered_branches}/{metrics.total_branches}"
+                if metrics is not None
+                else f"{result.branch_coverage.visited}/{result.branch_coverage.total}"
+            ),
+            "mcdc": (
+                f"{metrics.covered_mcdc_pairs}/{metrics.total_mcdc_pairs}"
+                if metrics is not None
+                else f"{result.mcdc_coverage.visited}/{result.mcdc_coverage.total}"
+            ),
+        },
+        "next_targets": next_targets if next_targets is not None else _next_targets(result, suite, top_targets),
+    }
+    if result.target_node_id is not None:
+        payload["target"] = {
+            "node_id": result.target_node_id,
+            "polarity": result.target_polarity,
+            "reason": result.target_reason,
+            "hit": _target_hit(result),
+            "first_blocker": _first_blocker(result),
+            "miss_context": _target_miss_context(result, suite),
+        }
+    if action_warnings:
+        payload["warnings"] = action_warnings
+    log = _compact_log(result)
+    if log:
+        payload["log"] = log
+    return json.dumps(payload, separators=(",", ":"))
 
 
 def _format_summary(

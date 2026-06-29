@@ -1,15 +1,20 @@
 """Tests for RunContext and ExecuteTestcaseTool custom context — pure, no network."""
 
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from covxplore.api_client import AkaUTError, ExecuteResult
-from covxplore.types import ConditionTraceEntry, TestResult, TestSuite
+from covxplore.types import ConditionTraceEntry, TestResult, TestSuite, UnvisitedBranch
 from covxplore.status import TestStatus
 from covxplore.tools.execute_testcase import (
     HardStop,
     RunContext,
     ExecuteTestcaseTool,
     _format_condition_trace,
+    _next_targets,
+    _target_score,
 )
 
 
@@ -219,6 +224,521 @@ class TestExecuteTestcaseToolRobustResponses:
 
         assert "===  t1 | PASSED" in output
         assert "Target → node=2 polarity=TRUE reason=cover node 2 true" in output
+
+    def test_compact_feedback_returns_json_target_hit_and_next_targets(self, monkeypatch):
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+        settings = type(
+            "Settings",
+            (),
+            {
+                "min_suite_size": 1,
+                "redundant_streak_limit": 99,
+                "fail_streak_limit": 99,
+                "mcdc_target": 1.0,
+                "compact_feedback": True,
+                "compact_feedback_top_targets": 2,
+            },
+        )()
+        monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
+        _FakeExecutor.response = ExecuteResult(
+            raw={
+                "testName": "t1",
+                "status": "PASSED",
+                "mcdcCoverage": {"visited": 1, "total": 4, "progress": 0.25},
+                "unvisitedMcdcConditions": [
+                    {
+                        "nodeId": 2,
+                        "condition": "x > 0",
+                        "trueBranchVisited": True,
+                        "falseBranchVisited": False,
+                    },
+                    {
+                        "nodeId": 3,
+                        "condition": "y == 1",
+                        "trueBranchVisited": False,
+                        "falseBranchVisited": False,
+                    },
+                ],
+                "conditionTrace": [
+                    {
+                        "nodeId": 2,
+                        "condition": "x > 0",
+                        "trueBranchVisited": True,
+                        "falseBranchVisited": False,
+                    }
+                ],
+            }
+        )
+        _FakeExecutor.error = None
+
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            "run-1",
+            "/x.cpp::f()",
+            "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
+            "t1",
+            target_node_id=2,
+            target_polarity="TRUE",
+            target_reason="cover node 2 true",
+        )
+
+        payload = json.loads(output)
+        assert payload["status"] == "PASSED"
+        assert payload["target"]["hit"] is True
+        assert payload["suite"]["mcdc"] == "1/4"
+        assert payload["next_targets"] == [
+            {
+                "node_id": 2,
+                "polarity": "FALSE",
+                "kind": "mcdc",
+                "condition": "x > 0",
+                "attempts": 0,
+                "misses": 0,
+            },
+            {
+                "node_id": 3,
+                "polarity": "TRUE",
+                "kind": "mcdc",
+                "condition": "y == 1",
+                "attempts": 0,
+                "misses": 0,
+            },
+        ]
+
+    def test_compact_feedback_includes_miss_context_after_two_misses(self, monkeypatch):
+        class QueueExecutor:
+            def __init__(self):
+                self.responses = [
+                    ExecuteResult(
+                        raw={
+                            "testName": "t1",
+                            "status": "PASSED",
+                            "mcdcCoverage": {"visited": 0, "total": 2, "progress": 0.0},
+                            "unvisitedMcdcConditions": [
+                                {
+                                    "nodeId": 1,
+                                    "condition": "a",
+                                    "trueBranchVisited": False,
+                                    "falseBranchVisited": False,
+                                }
+                            ],
+                            "conditionTrace": [
+                                {
+                                    "nodeId": 9,
+                                    "condition": "blocker",
+                                    "trueBranchVisited": False,
+                                    "falseBranchVisited": True,
+                                }
+                            ],
+                        }
+                    ),
+                    ExecuteResult(
+                        raw={
+                            "testName": "t2",
+                            "status": "PASSED",
+                            "mcdcCoverage": {"visited": 0, "total": 2, "progress": 0.0},
+                            "unvisitedMcdcConditions": [
+                                {
+                                    "nodeId": 1,
+                                    "condition": "a",
+                                    "trueBranchVisited": False,
+                                    "falseBranchVisited": False,
+                                }
+                            ],
+                            "conditionTrace": [
+                                {
+                                    "nodeId": 9,
+                                    "condition": "blocker",
+                                    "trueBranchVisited": False,
+                                    "falseBranchVisited": True,
+                                }
+                            ],
+                        }
+                    ),
+                ]
+
+            def execute(self, absolute_path, test_body, test_name=None):
+                return self.responses.pop(0)
+
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+        settings = type(
+            "Settings",
+            (),
+            {
+                "min_suite_size": 99,
+                "redundant_streak_limit": 99,
+                "fail_streak_limit": 99,
+                "mcdc_target": 1.0,
+                "compact_feedback": True,
+                "compact_feedback_top_targets": 3,
+            },
+        )()
+        monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
+        tool = ExecuteTestcaseTool(run_context=ctx, executor=QueueExecutor())
+        tool._run(
+            "run-1",
+            "/x.cpp::f()",
+            "f();",
+            "t1",
+            target_node_id=1,
+            target_polarity="TRUE",
+            target_reason="miss once",
+        )
+
+        output = tool._run(
+            "run-1",
+            "/x.cpp::f()",
+            "f();",
+            "t2",
+            target_node_id=1,
+            target_polarity="TRUE",
+            target_reason="miss twice",
+        )
+
+        miss_context = json.loads(output)["target"]["miss_context"]
+        assert miss_context["attempts"] == 2
+        assert miss_context["misses"] == 2
+        assert miss_context["trace_chain"] == [
+            {"node_id": 9, "condition": "blocker", "true": False, "false": True}
+        ]
+
+    def test_compact_feedback_blocks_target_after_three_misses(self, monkeypatch):
+        class QueueExecutor:
+            def __init__(self):
+                self.responses = [
+                    ExecuteResult(
+                        raw={
+                            "testName": f"t{i}",
+                            "status": "PASSED",
+                            "mcdcCoverage": {"visited": 0, "total": 2, "progress": 0.0},
+                            "unvisitedMcdcConditions": [
+                                {
+                                    "nodeId": 1,
+                                    "condition": "a",
+                                    "trueBranchVisited": False,
+                                    "falseBranchVisited": False,
+                                }
+                            ],
+                        }
+                    )
+                    for i in range(1, 4)
+                ]
+
+            def execute(self, absolute_path, test_body, test_name=None):
+                return self.responses.pop(0)
+
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+        settings = type(
+            "Settings",
+            (),
+            {
+                "min_suite_size": 99,
+                "redundant_streak_limit": 99,
+                "fail_streak_limit": 99,
+                "mcdc_target": 1.0,
+                "compact_feedback": True,
+                "compact_feedback_top_targets": 2,
+            },
+        )()
+        monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
+        tool = ExecuteTestcaseTool(run_context=ctx, executor=QueueExecutor())
+        for i in range(1, 3):
+            tool._run(
+                "run-1",
+                "/x.cpp::f()",
+                "f();",
+                f"t{i}",
+                target_node_id=1,
+                target_polarity="TRUE",
+                target_reason="miss",
+            )
+
+        output = tool._run(
+            "run-1",
+            "/x.cpp::f()",
+            "f();",
+            "t3",
+            target_node_id=1,
+            target_polarity="TRUE",
+            target_reason="miss",
+        )
+
+        payload = json.loads(output)
+        assert payload["blocked_targets"] == [
+            {
+                "node_id": 1,
+                "polarity": "TRUE",
+                "reason": "blocked after 3 target misses across 3 attempts",
+            }
+        ]
+        assert all(
+            target["polarity"] != "TRUE" for target in payload["next_targets"]
+        )
+
+    def test_compact_feedback_rejects_stale_target_without_execution(self, monkeypatch):
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+        settings = type(
+            "Settings",
+            (),
+            {
+                "min_suite_size": 1,
+                "redundant_streak_limit": 99,
+                "fail_streak_limit": 99,
+                "mcdc_target": 1.0,
+                "compact_feedback": True,
+                "compact_feedback_top_targets": 1,
+            },
+        )()
+        monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
+        executor = _FakeExecutor()
+        executor.calls = []
+        executor.response = ExecuteResult(
+            raw={
+                "testName": "t1",
+                "status": "PASSED",
+                "mcdcCoverage": {"visited": 0, "total": 2, "progress": 0.0},
+                "unvisitedMcdcConditions": [
+                    {
+                        "nodeId": 1,
+                        "condition": "a",
+                        "trueBranchVisited": False,
+                        "falseBranchVisited": False,
+                    }
+                ],
+            }
+        )
+        tool = ExecuteTestcaseTool(run_context=ctx, executor=executor)
+        tool._run("run-1", "/x.cpp::f()", "f();", "t1")
+
+        output = tool._run(
+            "run-1",
+            "/x.cpp::f()",
+            "f();",
+            "t2",
+            target_node_id=99,
+            target_polarity="TRUE",
+            target_reason="stale target",
+        )
+
+        payload = json.loads(output)
+        assert payload["status"] == "TARGET_NOT_ALLOWED"
+        assert payload["next_targets"] == [
+            {
+                "node_id": 1,
+                "polarity": "TRUE",
+                "kind": "mcdc",
+                "condition": "a",
+                "attempts": 0,
+                "misses": 0,
+            }
+        ]
+        assert len(executor.calls) == 1
+
+    def test_compact_feedback_uses_cumulative_mcdc_gaps(self, monkeypatch):
+        class QueueExecutor:
+            def __init__(self):
+                self.responses = [
+                    ExecuteResult(
+                        raw={
+                            "testName": "t1",
+                            "status": "PASSED",
+                            "mcdcCoverage": {"visited": 1, "total": 2, "progress": 0.5},
+                            "unvisitedMcdcConditions": [
+                                {
+                                    "nodeId": 23,
+                                    "condition": "testLeading",
+                                    "trueBranchVisited": True,
+                                    "falseBranchVisited": False,
+                                }
+                            ],
+                            "conditionTrace": [
+                                {
+                                    "nodeId": 23,
+                                    "condition": "testLeading",
+                                    "trueBranchVisited": True,
+                                    "falseBranchVisited": False,
+                                }
+                            ],
+                        }
+                    ),
+                    ExecuteResult(
+                        raw={
+                            "testName": "t2",
+                            "status": "PASSED",
+                            "mcdcCoverage": {"visited": 1, "total": 2, "progress": 0.5},
+                            "unvisitedMcdcConditions": [
+                                {
+                                    "nodeId": 23,
+                                    "condition": "testLeading",
+                                    "trueBranchVisited": False,
+                                    "falseBranchVisited": False,
+                                }
+                            ],
+                        }
+                    ),
+                ]
+
+            def execute(self, absolute_path, test_body, test_name=None):
+                return self.responses.pop(0)
+
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+        settings = type(
+            "Settings",
+            (),
+            {
+                "min_suite_size": 1,
+                "redundant_streak_limit": 99,
+                "fail_streak_limit": 99,
+                "mcdc_target": 1.0,
+                "compact_feedback": True,
+                "compact_feedback_top_targets": 3,
+            },
+        )()
+        monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
+        tool = ExecuteTestcaseTool(run_context=ctx, executor=QueueExecutor())
+
+        tool._run("run-1", "/x.cpp::f()", "f();", "t1")
+        output = tool._run("run-1", "/x.cpp::f()", "f();", "t2")
+
+        payload = json.loads(output)
+        assert {
+            "node_id": 23,
+            "polarity": "TRUE",
+            "kind": "mcdc",
+            "condition": "testLeading",
+            "attempts": 0,
+            "misses": 0,
+        } not in payload["next_targets"]
+        assert payload["next_targets"][0]["node_id"] == 23
+        assert payload["next_targets"][0]["polarity"] == "FALSE"
+
+    def test_next_targets_omit_blocked_targets(self):
+        suite = TestSuite("/x.cpp::f()")
+        suite.coverage.seed_conditions(
+            [
+                SimpleNamespace(node_id=1, condition="a", line_in_function=1),
+                SimpleNamespace(node_id=2, condition="b", line_in_function=2),
+            ],
+            total_mcdc_pairs=4,
+        )
+        result = TestResult(
+            test_name="t1",
+            test_body="f();",
+            status=TestStatus.PASSED.value,
+        )
+
+        targets = _next_targets(result, suite, 4, {(1, "TRUE"): "blocked"})
+
+        assert {"node_id": 1, "polarity": "TRUE"} not in [
+            {"node_id": target["node_id"], "polarity": target["polarity"]}
+            for target in targets
+        ]
+        assert targets[0]["node_id"] == 1
+        assert targets[0]["polarity"] == "FALSE"
+
+    def test_next_targets_are_mcdc_first_when_mcdc_remains(self):
+        suite = TestSuite("/x.cpp::f()")
+        suite.coverage.seed_conditions(
+            [SimpleNamespace(node_id=1, condition="a", line_in_function=1)],
+            total_mcdc_pairs=2,
+        )
+        result = TestResult(
+            test_name="t1",
+            test_body="f();",
+            status=TestStatus.PASSED.value,
+            unvisited_branches=[
+                UnvisitedBranch(
+                    node_id=99,
+                    condition="branch",
+                    true_visited=False,
+                    false_visited=False,
+                )
+            ],
+        )
+
+        targets = _next_targets(result, suite, 3)
+
+        assert targets == [
+            {
+                "node_id": 1,
+                "polarity": "TRUE",
+                "kind": "mcdc",
+                "condition": "a",
+                "attempts": 0,
+                "misses": 0,
+            },
+            {
+                "node_id": 1,
+                "polarity": "FALSE",
+                "kind": "mcdc",
+                "condition": "a",
+                "attempts": 0,
+                "misses": 0,
+            },
+        ]
+
+    def test_target_score_penalizes_attempts_misses_and_redundancy(self):
+        clean = {
+            "node_id": 1,
+            "polarity": "TRUE",
+            "kind": "mcdc",
+            "attempts": 0,
+            "misses": 0,
+        }
+        missed = {**clean, "attempts": 2, "misses": 2}
+        suite = SimpleNamespace(
+            tests=[
+                TestResult(
+                    test_name="t1",
+                    test_body="f();",
+                    status=TestStatus.PASSED.value,
+                    target_node_id=1,
+                    target_polarity="TRUE",
+                    is_redundant=True,
+                )
+            ]
+        )
+
+        assert _target_score(clean, None) == 100
+        assert _target_score(missed, None) == -70
+        assert _target_score(clean, suite) == 0
+
+    def test_compact_feedback_truncates_failure_log(self, monkeypatch):
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+        settings = type(
+            "Settings",
+            (),
+            {
+                "min_suite_size": 1,
+                "redundant_streak_limit": 99,
+                "fail_streak_limit": 99,
+                "mcdc_target": 1.0,
+                "compact_feedback": True,
+                "compact_feedback_top_targets": 3,
+            },
+        )()
+        monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
+        _FakeExecutor.response = ExecuteResult(
+            raw={
+                "testName": "t1",
+                "status": "COMPILE_ERROR",
+                "executeLog": "error: " + "x" * 1000,
+            }
+        )
+        _FakeExecutor.error = None
+
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            "run-1", "/x.cpp::f()", "f();", "t1"
+        )
+
+        payload = json.loads(output)
+        assert payload["log"]["category"] == "compile_error"
+        assert len(payload["log"]["excerpt"]) == 500
 
     def test_tool_rejects_invalid_phase4_action_without_calling_executor(self):
         executor = _FakeExecutor()

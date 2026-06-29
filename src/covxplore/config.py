@@ -1,5 +1,6 @@
 """Runtime settings for covxplore, loaded from environment variables or .env file."""
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +40,16 @@ class Settings(BaseSettings):
     redundant_streak_limit: int = 3  # early-stop after N consecutive redundant tests
     fail_streak_limit: int = 5  # early-stop after N consecutive failing tests (0 passing)
     request_timeout_sec: int = 120  # per REST call
+    compact_feedback: bool = Field(
+        False,
+        validation_alias=AliasChoices("compact_feedback", "COVXPLORE_COMPACT_FEEDBACK"),
+    )
+    compact_feedback_top_targets: int = Field(
+        3,
+        validation_alias=AliasChoices(
+            "compact_feedback_top_targets", "COVXPLORE_COMPACT_FEEDBACK_TOP_TARGETS"
+        ),
+    )
 
     # Ablation
     default_prompt_variant: str = "full"
