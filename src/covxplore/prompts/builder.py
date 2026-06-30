@@ -35,7 +35,6 @@ class PromptBuilder:
         system_prompt = builder.system_prompt()
         task_desc = builder.task_description(
             function_path=...,
-            run_id=...,
             suite=...,
             remaining_iterations=...)
     """
@@ -60,7 +59,6 @@ class PromptBuilder:
     def task_description(
         self,
         function_path: str,
-        run_id: str,
         suite=None,  # TestSuite | None
         remaining_iterations: int = 0,
         static_conditions_text: str | None = None,
@@ -79,16 +77,14 @@ class PromptBuilder:
         parts: list[str] = [
             f"Generate test cases to maximise {coverage_target} for the function at:\n"
             f"  {function_path}\n\n"
-            f"Run id for this generation run: {run_id}\n"
-            "Every execute_testcase call MUST include this exact run_id value.\n\n"
             "Workflow:\n"
             "Use the preloaded static data below as ground truth (conditions, context, source).\n"
             "If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol.\n"
             "Do NOT call static condition/context fetch tools again; they are already provided below.\n"
-            "Generate one focused test body and call execute_testcase.\n"
+            "Prefer execute_testcase_batch with 3-5 focused test bodies targeting distinct obligations; use execute_testcase for a single fallback test.\n"
             "After each execution, use coverage feedback to target the next uncovered statements, branches, or conditions."
             + (
-                "\nTarget exactly one uncovered obligation per iteration before calling execute_testcase."
+                "\nIn each batch, target distinct uncovered nodeId/polarity obligations."
                 if has_mcdc
                 else ""
             )

@@ -1,4 +1,4 @@
-OUTPUT FORMAT for test bodies submitted to execute_testcase:
+OUTPUT FORMAT for test bodies submitted to execute_testcase_batch or execute_testcase:
 
 The test_body argument must be raw C++ code that will be inserted verbatim into
 AkaUT's generated test harness. Rules:
@@ -13,6 +13,8 @@ AkaUT's generated test harness. Rules:
 6. ONE function call per test body — do not test multiple code paths in one test.
 7. NAME your test to reflect the targeted condition and polarity, e.g.:
      test_name="tc_bar_condX_true_001"
+
+For execute_testcase_batch, each candidate follows these same test_body rules.
 
 Example of a valid test body (no harness boilerplate, no asserts):
   // Target: x > 0 → TRUE branch

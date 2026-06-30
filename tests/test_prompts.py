@@ -169,10 +169,7 @@ class TestPromptBuilderTaskDescription:
             )
         )
 
-        text = builder.task_description(
-            function_path="/x.cpp::f()",
-            run_id="run-123",
-        )
+        text = builder.task_description(function_path="/x.cpp::f()")
 
-        assert "Run id for this generation run: run-123" in text
-        assert "Every execute_testcase call MUST include this exact run_id value." in text
+        assert "Run id" not in text
+        assert "execute_testcase call MUST include" not in text

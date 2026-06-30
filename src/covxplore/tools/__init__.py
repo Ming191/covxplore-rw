@@ -1,6 +1,7 @@
 from covxplore.tools.get_source import GetNodeSourceTool
 from covxplore.tools.search_nodes import SearchNodesTool
 from covxplore.tools.execute_testcase import (
+    ExecuteTestcaseBatchTool,
     ExecuteTestcaseTool,
     RunContext,
 )
@@ -8,6 +9,7 @@ from covxplore.tools.execute_testcase import (
 __all__ = [
     "GetNodeSourceTool",
     "SearchNodesTool",
+    "ExecuteTestcaseBatchTool",
     "ExecuteTestcaseTool",
     "RunContext",
 ]

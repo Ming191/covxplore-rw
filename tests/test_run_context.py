@@ -6,6 +6,7 @@ from covxplore.api_client import AkaUTError, ExecuteResult
 from covxplore.types import ConditionTraceEntry, TestResult, TestSuite
 from covxplore.status import TestStatus
 from covxplore.tools.execute_testcase import (
+    ExecuteTestcaseBatchTool,
     HardStop,
     RunContext,
     ExecuteTestcaseTool,
@@ -22,6 +23,7 @@ class TestRunContext:
         assert suite.function_path == "/f.cpp::foo()"
         assert ctx._suites["run-A"] is suite
         assert ctx.get_suite("run-A") is suite
+        assert ctx.active_suite() is suite
 
     def test_cleanup_suite_removes_only_requested_run(self):
         ctx = RunContext()
@@ -32,6 +34,7 @@ class TestRunContext:
 
         assert "run-1" not in ctx._suites
         assert "run-2" in ctx._suites
+        assert ctx.active_suite() is ctx.get_suite("run-2")
 
     def test_cleanup_nonexistent_run_no_error(self):
         ctx = RunContext()
@@ -112,7 +115,10 @@ class TestExecuteTestcaseToolRobustResponses:
         _FakeExecutor.response = ExecuteResult(raw=raw)
         _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run("run-1", "/x.cpp::f()", "f();", "t1")
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
 
         assert "Stmt: 0/0 (0%)" in output
         assert "Branch: 0/0 (0%)" in output
@@ -130,7 +136,10 @@ class TestExecuteTestcaseToolRobustResponses:
         _FakeExecutor.response = ExecuteResult(raw=raw)
         _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run("run-1", "/x.cpp::f()", "f();", "t1")
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
 
         assert "===  t1 | PASSED" in output
 
@@ -143,7 +152,10 @@ class TestExecuteTestcaseToolRobustResponses:
         _FakeExecutor.response = ExecuteResult(raw=raw)
         _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run("run-1", "/x.cpp::f()", "f();", "t1")
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
 
         assert "===  t1 | PASSED" in output
 
@@ -153,35 +165,63 @@ class TestExecuteTestcaseToolRobustResponses:
         _FakeExecutor.response = None
         _FakeExecutor.error = AkaUTError("POST http://localhost/api/testcase/execute failed: boom")
 
-        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("run-1", "/x.cpp::f()", "f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
 
         assert "[EXECUTE_ERROR]" in output
         assert "COMPILE_ERROR" not in output
         assert suite.tests == []
 
-    def test_tool_uses_explicit_run_id_for_suite_lookup(self):
+    def test_tool_uses_active_suite(self):
         ctx = RunContext()
         suite_a = ctx.reset_suite("/a.cpp::f()", "run-A")
         suite_b = ctx.reset_suite("/b.cpp::g()", "run-B")
         _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
         _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("run-A", "/a.cpp::f()", "f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
 
         assert "Suite best" in output
-        assert len(suite_a.tests) == 1
-        assert suite_b.tests == []
+        assert suite_a.tests == []
+        assert len(suite_b.tests) == 1
 
-    def test_unknown_run_id_executes_without_suite_mutation(self):
+    def test_tool_injects_absolute_path_from_run_context(self):
+        ctx = RunContext()
+        ctx.reset_suite("/auto.cpp::f()", "run-A")
+        executor = _FakeExecutor()
+        executor.calls = []
+        executor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
+        executor.error = None
+
+        output = ExecuteTestcaseTool(run_context=ctx, executor=executor)._run(
+            test_body="f();",
+            test_name="t1",
+        )
+
+        assert "===  t1 | PASSED" in output
+        assert executor.calls == [("/auto.cpp::f()", "f();", "t1")]
+
+    def test_tool_rejects_missing_path_for_unknown_run(self):
+        executor = _FakeExecutor()
+        executor.calls = []
+
+        output = ExecuteTestcaseTool(run_context=RunContext(), executor=executor)._run(
+            test_body="f();",
+            test_name="t1",
+        )
+
+        assert "could not resolve target function path" in output
+        assert executor.calls == []
+
+    def test_cleaned_up_active_run_rejects_without_suite_mutation(self):
         ctx = RunContext()
         suite = ctx.reset_suite("/known.cpp::f()", "known-run")
+        ctx.cleanup_suite("known-run")
         _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
         _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("unknown-run", "/x.cpp::f()", "f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
 
-        assert "===  t1 | PASSED" in output
-        assert "Suite best" not in output
+        assert "could not resolve target function path" in output
         assert suite.tests == []
 
     def test_contract_error_rejects_without_calling_executor(self):
@@ -191,8 +231,6 @@ class TestExecuteTestcaseToolRobustResponses:
         executor.calls = []
 
         output = ExecuteTestcaseTool(run_context=ctx, executor=executor)._run(
-            "run-1",
-            "/x.cpp::f()",
             "```cpp\nf();\n```",
             "bad",
         )
@@ -204,12 +242,12 @@ class TestExecuteTestcaseToolRobustResponses:
         assert suite.tests[0].status == TestStatus.COMPILE_ERROR.value
 
     def test_tool_accepts_phase4_target_metadata(self):
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
         _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
         _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run(
-            "run-1",
-            "/x.cpp::f()",
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
             "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
             "t1",
             target_node_id=2,
@@ -225,8 +263,6 @@ class TestExecuteTestcaseToolRobustResponses:
         executor.calls = []
 
         output = ExecuteTestcaseTool(run_context=RunContext(), executor=executor)._run(
-            "run-1",
-            "/x.cpp::f()",
             "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
             "t1",
             target_node_id=2,
@@ -237,12 +273,12 @@ class TestExecuteTestcaseToolRobustResponses:
         assert executor.calls == []
 
     def test_tool_surfaces_target_reason_warning(self):
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
         _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
         _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=RunContext(), executor=_FakeExecutor())._run(
-            "run-1",
-            "/x.cpp::f()",
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
             "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
             "t1",
             target_node_id=2,
@@ -268,7 +304,7 @@ class TestExecuteTestcaseToolRobustResponses:
 
         with pytest.raises(HardStop) as exc:
             ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
-                "run-1", "/x.cpp::f()", "f();", "t1"
+                "f();", "t1"
             )
 
         assert exc.value.reason == "coverage_target"
@@ -298,11 +334,78 @@ class TestExecuteTestcaseToolRobustResponses:
 
         with pytest.raises(HardStop) as exc:
             ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
-                "run-1", "/x.cpp::f()", "f();", "t1"
+                "f();", "t1"
             )
 
         assert exc.value.reason == "redundant_streak"
         assert suite.coverage.consecutive_redundant == 3
+
+
+class TestExecuteTestcaseBatchTool:
+    def test_batch_arun_executes_merges_and_keeps_contract_errors(self):
+        class Executor:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, absolute_path: str, test_body: str, test_name: str | None = None):
+                self.calls.append((absolute_path, test_body, test_name))
+                trace = [
+                    {
+                        "nodeId": 1,
+                        "condition": "c1",
+                        "trueBranchVisited": True,
+                        "falseBranchVisited": False,
+                    }
+                ] if test_name in {"first", "dupe"} else [
+                    {
+                        "nodeId": 2,
+                        "condition": "c2",
+                        "trueBranchVisited": True,
+                        "falseBranchVisited": False,
+                    },
+                    {
+                        "nodeId": 3,
+                        "condition": "c3",
+                        "trueBranchVisited": False,
+                        "falseBranchVisited": True,
+                    },
+                ]
+                return ExecuteResult(
+                    raw={
+                        "testName": test_name,
+                        "status": "PASSED",
+                        "conditionTrace": trace,
+                    }
+                )
+
+        ctx = RunContext()
+        suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+        executor = Executor()
+
+        output = ExecuteTestcaseBatchTool(run_context=ctx, executor=executor)._run(
+            [
+                {"test_body": "f(1);", "test_name": "first"},
+                {"test_body": "f(1);", "test_name": "dupe"},
+                {"test_body": "f(2);", "test_name": "second"},
+                {"test_body": "```cpp\nf();\n```", "test_name": "bad"},
+            ]
+        )
+
+        assert len(executor.calls) == 3
+        assert ("/x.cpp::f()", "f(1);", "first") in executor.calls
+        assert ("/x.cpp::f()", "f(1);", "dupe") in executor.calls
+        assert ("/x.cpp::f()", "f(2);", "second") in executor.calls
+        assert "Accepted:" in output
+        assert "Rejected redundant: dupe" in output
+        assert [test.test_name for test in suite.tests] == ["second", "first", "bad"]
+        assert suite.tests[-1].status == TestStatus.COMPILE_ERROR.value
+
+    def test_batch_arun_requires_active_suite(self):
+        output = ExecuteTestcaseBatchTool(run_context=RunContext())._run(
+            [{"test_body": "f();", "test_name": "t1"}]
+        )
+
+        assert "could not resolve target function path" in output
 
 
 def test_format_condition_trace_sorts_mixed_node_ids_without_crashing():

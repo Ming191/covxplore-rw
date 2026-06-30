@@ -6,8 +6,6 @@ from covxplore.agents import GenerateTestAction, validate_tool_input
 
 def _valid_payload(**overrides):
     payload = {
-        "run_id": "run-1",
-        "absolute_path": "/x.cpp::f()",
         "test_body": "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
         "test_name": "t1",
     }
@@ -20,12 +18,11 @@ def test_generate_test_action_accepts_valid_payload():
         _valid_payload(target_node_id=2, target_polarity="TRUE", target_reason="cover true")
     )
 
-    assert action.run_id == "run-1"
     assert action.target_node_id == 2
     assert action.target_polarity == "TRUE"
 
 
-@pytest.mark.parametrize("field", ["run_id", "absolute_path", "test_body"])
+@pytest.mark.parametrize("field", ["test_body"])
 def test_generate_test_action_rejects_blank_required_fields(field):
     with pytest.raises(ValidationError):
         GenerateTestAction.model_validate(_valid_payload(**{field: "  "}))

@@ -8,7 +8,7 @@ from crewai.tools import BaseTool
 from covxplore.config import get_settings
 from covxplore.llm import build_llm
 from covxplore.prompts import PromptBuilder
-from covxplore.tools import SearchNodesTool, GetNodeSourceTool, ExecuteTestcaseTool
+from covxplore.tools import SearchNodesTool, GetNodeSourceTool, ExecuteTestcaseBatchTool, ExecuteTestcaseTool
 from covxplore.tools.execute_testcase import RunContext
 
 
@@ -85,6 +85,7 @@ def build_crew(
     builder = PromptBuilder(prompt_config)
 
     tools = [
+        ExecuteTestcaseBatchTool(run_context=run_context),
         ExecuteTestcaseTool(run_context=run_context),
         GetNodeSourceTool(),
         SearchNodesTool(),

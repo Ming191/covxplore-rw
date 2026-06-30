@@ -9,20 +9,6 @@ from typing_extensions import Self
 class GenerateTestAction(BaseModel):
     """Schema for one generated test execution action."""
 
-    run_id: str = Field(
-        ...,
-        description=(
-            "Opaque generation run id provided in the task instructions. "
-            "Pass it unchanged on every execute_testcase call."
-        ),
-    )
-    absolute_path: str = Field(
-        ...,
-        description=(
-            "Absolute path of the function node being tested "
-            "(same value used throughout a generation run)."
-        ),
-    )
     test_body: str = Field(
         ...,
         description=(
@@ -49,7 +35,7 @@ class GenerateTestAction(BaseModel):
         description="Optional short reason explaining why this target was selected.",
     )
 
-    @field_validator("run_id", "absolute_path", "test_body")
+    @field_validator("test_body")
     @classmethod
     def _not_blank(cls, value: str) -> str:
         if not value.strip():
@@ -72,3 +58,14 @@ class GenerateTestAction(BaseModel):
         if self.target_node_id is not None and self.target_node_id <= 0:
             raise ValueError("target_node_id must be positive")
         return self
+
+
+class GenerateTestBatchAction(BaseModel):
+    """Schema for one batch of generated test execution actions."""
+
+    candidates: list[GenerateTestAction] = Field(
+        ...,
+        min_length=1,
+        max_length=5,
+        description="Small batch of 1-5 distinct test candidates to execute concurrently.",
+    )

@@ -222,7 +222,6 @@ def generate(config: GenerationConfig) -> GenerationResult:
             "agent_backstory": builder.system_prompt(),
             "task_description": builder.task_description(
                 function_path=config.function_path,
-                run_id=config.run_id,
                 suite=suite,
                 remaining_iterations=config.max_iterations,
                 static_conditions_text=static_prompt_data.conditions_text,
