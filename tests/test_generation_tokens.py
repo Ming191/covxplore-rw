@@ -19,13 +19,6 @@ class _CrewInst:
     def crew(self):
         return self._crew
 
-
-def _logger(prompt=0, completion=0):
-    return SimpleNamespace(
-        interactions=[{"usage": {"prompt_tokens": prompt, "completion_tokens": completion}}]
-    )
-
-
 def _result(name, status="PASSED", in_tokens=0, out_tokens=0):
     return TestResult(
         test_name=name,
@@ -36,14 +29,14 @@ def _result(name, status="PASSED", in_tokens=0, out_tokens=0):
     )
 
 
-def test_token_totals_crew_precedence_over_logger():
-    totals = choose_run_token_totals(_CrewInst(10, 20), _logger(100, 200))
+def test_token_totals_use_crew_usage_metrics():
+    totals = choose_run_token_totals(_CrewInst(10, 20))
     assert totals == TokenTotals(prompt=10, completion=20)
 
 
-def test_token_totals_fallback_to_logger_when_crew_zero():
-    totals = choose_run_token_totals(_CrewInst(0, 0), _logger(100, 200))
-    assert totals == TokenTotals(prompt=100, completion=200)
+def test_token_totals_zero_when_crew_usage_metrics_zero():
+    totals = choose_run_token_totals(_CrewInst(0, 0))
+    assert totals == TokenTotals()
 
 
 def test_reconcile_suite_tokens_distributes_to_eligible_statuses_with_remainder():

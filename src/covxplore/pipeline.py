@@ -185,6 +185,7 @@ def _write_pipeline_summary_rows(
                 "total_input_tokens",
                 "total_output_tokens",
                 "total_tokens",
+                "tracing_url",
                 "elapsed_sec",
                 "iterations_used",
                 "num_tests",

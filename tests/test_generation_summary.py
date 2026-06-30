@@ -27,3 +27,5 @@ def test_summary_contract_minimal_keys_and_token_total_sum():
     assert summary["metrics"]["total_input_tokens"] == 11
     assert summary["metrics"]["total_output_tokens"] == 13
     assert summary["metrics"]["total_tokens"] == 24
+    assert summary["tracing_url"] is None
+    assert summary["llm_interactions"] == []

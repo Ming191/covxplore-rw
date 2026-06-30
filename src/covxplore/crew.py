@@ -72,7 +72,7 @@ class CovxploreCrew:
             tasks=self.tasks,  # auto-collected by @task
             process=Process.sequential,
             verbose=True,
-            tracing=get_settings().langfuse_enabled,
+            tracing=False,
         )
 
 

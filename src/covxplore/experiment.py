@@ -33,6 +33,7 @@ def flat_row(result: GenerationResult) -> dict:
         "total_input_tokens": result.total_input_tokens,
         "total_output_tokens": result.total_output_tokens,
         "total_tokens": result.total_input_tokens + result.total_output_tokens,
+        "tracing_url": result.tracing_url or "",
         "elapsed_sec": result.elapsed_sec,
         "iterations_used": result.iterations_used,
         "num_tests": len(suite.tests),

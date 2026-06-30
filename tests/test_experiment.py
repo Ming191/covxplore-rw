@@ -184,3 +184,20 @@ class TestFlatRow:
         )
         row = flat_row(result)
         assert row["stop_reason"] == stop_reason
+
+    def test_tracing_url_in_flat_row(self):
+        config = GenerationConfig(
+            function_path="/trace.cpp::f()",
+            prompt_variant="full",
+        )
+        suite = TestSuite(function_path=config.function_path)
+        result = GenerationResult(
+            config=config,
+            suite=suite,
+            stop_reason="coverage_target",
+            tracing_url="http://localhost:3000/project/covxplore/traces/abc",
+        )
+
+        row = flat_row(result)
+
+        assert row["tracing_url"] == "http://localhost:3000/project/covxplore/traces/abc"

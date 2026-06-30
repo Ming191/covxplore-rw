@@ -27,8 +27,14 @@ from covxplore.generation.stop_reasons import (
     deduce_agent_done_stop_reason,
 )
 from covxplore.generation.tokens import choose_run_token_totals, reconcile_suite_tokens
-from covxplore.llm_logger import LLMInteractionLogger
-from covxplore.observability import flush_observability, init_observability
+from covxplore.observability import (
+    extract_trace_id,
+    fetch_trace_token_totals,
+    flush_observability,
+    get_trace_url,
+    init_observability,
+    trace_observation,
+)
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.prompts.registry import get_variant
 from covxplore.types import TestSuite
@@ -81,10 +87,8 @@ class GenerationResult:
 
     crew_prompt_tokens: int | None = None
     crew_completion_tokens: int | None = None
-    tracing_url: str | None = None  # CrewAI trace URL if tracing was enabled
-    llm_interactions: list[dict] = field(
-        default_factory=list
-    )  # per-call thinking+answer log
+    tracing_url: str | None = None  # Langfuse trace URL if tracing was enabled
+    llm_interactions: list[dict] = field(default_factory=list)  # legacy JSON key
 
     # ------------------------------------------------------------------ #
     # Derived metrics (computed from suite)                               #
@@ -209,7 +213,6 @@ def generate(config: GenerationConfig) -> GenerationResult:
     crew_completion_tokens = None
     tracing_url = None
     crew_inst = None
-    llm_logger = LLMInteractionLogger()
 
     try:
         init_observability()
@@ -232,8 +235,14 @@ def generate(config: GenerationConfig) -> GenerationResult:
             ),
         }
         crew_obj = crew_inst.crew()
-        llm_logger.attach()
-        crew_obj.kickoff(inputs=inputs)
+        with trace_observation(
+            "covxplore.generate",
+            run_id=config.run_id,
+            function_path=config.function_path,
+            prompt_variant=config.prompt_variant,
+        ) as langfuse_url:
+            tracing_url = langfuse_url
+            crew_obj.kickoff(inputs=inputs)
 
     except HardStop as e:
         stop_reason = e.reason  # type: ignore[assignment]
@@ -247,17 +256,15 @@ def generate(config: GenerationConfig) -> GenerationResult:
         traceback.print_exc()
 
     finally:
-        llm_logger.detach()
-        token_totals = choose_run_token_totals(crew_inst, llm_logger)
+        token_totals = choose_run_token_totals(crew_inst)
+        if tracing_url is None:
+            tracing_url = get_trace_url()
+        flush_observability()
+        if token_totals.total == 0:
+            token_totals = fetch_trace_token_totals(extract_trace_id(tracing_url))
         if token_totals.total > 0:
             crew_prompt_tokens = token_totals.prompt
             crew_completion_tokens = token_totals.completion
-        if crew_inst is not None:
-            try:
-                tracing_url = getattr(crew_inst.crew(), "_telemetry_url", None)
-            except Exception:
-                pass
-        flush_observability()
         final_suite = run_context.get_suite(config.run_id) or suite
         reconcile_suite_tokens(final_suite, token_totals)
 
@@ -294,7 +301,6 @@ def generate(config: GenerationConfig) -> GenerationResult:
         crew_prompt_tokens=crew_prompt_tokens,
         crew_completion_tokens=crew_completion_tokens,
         tracing_url=tracing_url,
-        llm_interactions=llm_logger.interactions,
     )
 
     _print_result_summary(result)

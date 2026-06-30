@@ -15,16 +15,6 @@ class TokenTotals:
         return self.prompt + self.completion
 
 
-def totals_from_llm_logger(llm_logger) -> TokenTotals:
-    prompt_tokens = 0
-    completion_tokens = 0
-    for interaction in getattr(llm_logger, "interactions", []) or []:
-        usage = interaction.get("usage") or {}
-        prompt_tokens += int(usage.get("prompt_tokens") or 0)
-        completion_tokens += int(usage.get("completion_tokens") or 0)
-    return TokenTotals(prompt=prompt_tokens, completion=completion_tokens)
-
-
 def totals_from_crew(crew_inst) -> TokenTotals:
     try:
         metrics = crew_inst.crew().usage_metrics if crew_inst is not None else None
@@ -38,11 +28,8 @@ def totals_from_crew(crew_inst) -> TokenTotals:
         return TokenTotals()
 
 
-def choose_run_token_totals(crew_inst, llm_logger) -> TokenTotals:
-    crew_totals = totals_from_crew(crew_inst)
-    if crew_totals.total > 0:
-        return crew_totals
-    return totals_from_llm_logger(llm_logger)
+def choose_run_token_totals(crew_inst) -> TokenTotals:
+    return totals_from_crew(crew_inst)
 
 
 def reconcile_suite_tokens(suite, totals: TokenTotals) -> None:
