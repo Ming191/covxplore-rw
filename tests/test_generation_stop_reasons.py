@@ -1,10 +1,7 @@
 from types import SimpleNamespace
 
-from covxplore.generation.stop_reasons import (
-    coverage_target_reached,
-    deduce_agent_done_stop_reason,
-)
-from covxplore.types import TestResult, TestSuite
+from covxplore.generation.stop_reasons import coverage_target_reached, infer_stop
+from covxplore.types import ConditionKey, CoverageDetail, TestResult, TestSuite
 
 
 def _config(max_iterations=10, redundant_streak_limit=3, mcdc_target=1.0):
@@ -20,29 +17,36 @@ def test_coverage_target_zero_iteration_guard():
     assert coverage_target_reached(suite, _config()) is False
 
 
-def test_stop_reason_precedence_max_iter_over_redundant_and_coverage():
+def test_stop_reason_precedence_coverage_over_max_iter():
     suite = TestSuite(function_path="f")
     suite.iteration_count = 10
-    suite.coverage.consecutive_redundant = 10
+    suite.tests = [TestResult(test_name="t", test_body="", status="PASSED")]
 
-    assert deduce_agent_done_stop_reason(suite, _config(max_iterations=10)) == "max_iter"
+    assert infer_stop(suite, _config(max_iterations=10)) == "coverage_target"
 
 
-def test_stop_reason_precedence_redundant_over_coverage():
+def test_stop_reason_precedence_redundant_before_max_iter():
     suite = TestSuite(function_path="f")
-    suite.iteration_count = 1
+    suite.iteration_count = 10
     suite.coverage.consecutive_redundant = 3
+    suite.coverage.total_mcdc_pairs = 2
+    suite.coverage._covered_keys = {ConditionKey(1, True)}
+    suite.coverage._condition_id_to_text = {1: "x"}
 
-
-    assert (
-        deduce_agent_done_stop_reason(suite, _config(redundant_streak_limit=3))
-        == "redundant_streak"
-    )
+    assert infer_stop(suite, _config(max_iterations=10, redundant_streak_limit=3)) == "redundant_streak"
 
 
 def test_stop_reason_coverage_target_when_reached():
     suite = TestSuite(function_path="f")
     suite.iteration_count = 1
-    suite.tests = [TestResult(test_name="t", test_body="", status="PASSED")]
+    suite.tests = [
+        TestResult(
+            test_name="t",
+            test_body="",
+            status="PASSED",
+            statement_coverage=CoverageDetail(visited=1, total=1, progress=1.0),
+            branch_coverage=CoverageDetail(visited=1, total=1, progress=1.0),
+        )
+    ]
 
-    assert deduce_agent_done_stop_reason(suite, _config()) == "coverage_target"
+    assert infer_stop(suite, _config()) == "coverage_target"

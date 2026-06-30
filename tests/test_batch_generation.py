@@ -37,6 +37,31 @@ def test_merge_recomputes_gain_and_rejects_redundant_overlap():
     assert suite.coverage._covered_keys == {ConditionKey(1, True)}
 
 
+def test_summary_records_rejected_redundant_streak():
+    suite = TestSuite(function_path="/f.cpp::f()")
+    suite.coverage.consecutive_redundant = 2
+    summary = merge_batch_results(suite, [_result("dupe", "PASSED", [])], min_suite_size=0)
+
+    summary.record_redundancy(suite)
+
+    assert suite.coverage.consecutive_redundant == 3
+    assert suite.tests == []
+
+
+def test_summary_keeps_progress_reset_when_batch_has_progress():
+    suite = TestSuite(function_path="/f.cpp::f()")
+    suite.coverage.consecutive_redundant = 2
+    progress = _result("progress", "PASSED", [(1, True)], "x();")
+    dupe = _result("dupe", "PASSED", [(1, True)], "y();")
+    summary = merge_batch_results(suite, [progress, dupe], min_suite_size=0)
+
+    summary.record_redundancy(suite)
+
+    assert summary.accepted == [progress]
+    assert summary.rejected_redundant == [dupe]
+    assert suite.coverage.consecutive_redundant == 0
+
+
 def test_merge_accepts_non_passing_results_for_visibility():
     suite = TestSuite(function_path="/f.cpp::f()")
     failure = _result("compile", "COMPILE_ERROR", [], "bad();")

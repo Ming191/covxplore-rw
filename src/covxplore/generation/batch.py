@@ -23,6 +23,13 @@ class BatchMergeSummary:
     accepted: list[TestResult] = field(default_factory=list)
     rejected_redundant: list[TestResult] = field(default_factory=list)
 
+    def record_redundancy(self, suite: TestSuite) -> None:
+        if not self.rejected_redundant:
+            return
+        if any(_is_coverage_result(result) and not result.is_redundant for result in self.accepted):
+            return
+        suite.coverage.consecutive_redundant += len(self.rejected_redundant)
+
 
 def _marginal_gain(suite: TestSuite, result: TestResult) -> int:
     return len(result.condition_keys() - suite.coverage._covered_keys)

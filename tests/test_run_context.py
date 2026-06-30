@@ -400,6 +400,36 @@ class TestExecuteTestcaseBatchTool:
         assert [test.test_name for test in suite.tests] == ["second", "first", "bad"]
         assert suite.tests[-1].status == TestStatus.COMPILE_ERROR.value
 
+    def test_batch_arun_hard_stops_on_rejected_redundant(self, monkeypatch):
+        class Executor:
+            def execute(self, absolute_path: str, test_body: str, test_name: str | None = None):
+                return ExecuteResult(raw={"testName": test_name, "status": "PASSED"})
+
+        settings = type(
+            "Settings",
+            (),
+            {
+                "min_suite_size": 0,
+                "redundant_streak_limit": 3,
+                "fail_streak_limit": 5,
+                "mcdc_target": 1.0,
+            },
+        )()
+        monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
+        ctx = RunContext()
+        suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+        suite.coverage.total_mcdc_pairs = 1
+        suite.coverage.consecutive_redundant = 2
+
+        with pytest.raises(HardStop) as exc:
+            ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())._run(
+                [{"test_body": "f();", "test_name": "dupe"}]
+            )
+
+        assert exc.value.reason == "redundant_streak"
+        assert suite.tests == []
+        assert suite.coverage.consecutive_redundant == 3
+
     def test_batch_arun_requires_active_suite(self):
         output = ExecuteTestcaseBatchTool(run_context=RunContext())._run(
             [{"test_body": "f();", "test_name": "t1"}]

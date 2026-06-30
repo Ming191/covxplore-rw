@@ -33,14 +33,14 @@ def coverage_target_reached(suite, config) -> bool:
     return mcdc_done and stmt_done and branch_done
 
 
-def deduce_agent_done_stop_reason(suite, config) -> StopReason:
-    if suite.iteration_count >= config.max_iterations:
-        return "max_iter"
+def infer_stop(suite, config) -> StopReason:
+    if coverage_target_reached(suite, config):
+        return "coverage_target"
     if suite.coverage.consecutive_redundant >= config.redundant_streak_limit:
         return "redundant_streak"
     fail_limit: int = getattr(config, "fail_streak_limit", 5)
     if suite.consecutive_failures() >= fail_limit:
         return "fail_streak"
-    if coverage_target_reached(suite, config):
-        return "coverage_target"
+    if suite.iteration_count >= config.max_iterations:
+        return "max_iter"
     return "agent_done"

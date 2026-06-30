@@ -308,6 +308,7 @@ class ExecuteTestcaseBatchTool(BaseTool):
         results.extend(async_results)
 
         summary = merge_batch_results(suite, results, cfg.min_suite_size)
+        summary.record_redundancy(suite)
         _raise_if_hard_stop(suite, cfg)
         return _format_batch_summary(suite, summary)
 

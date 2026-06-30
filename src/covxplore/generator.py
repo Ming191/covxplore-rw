@@ -24,7 +24,7 @@ from covxplore.generation.prompt_context import (
 from covxplore.generation.stop_reasons import (
     StopReason,
     coverage_target_reached,
-    deduce_agent_done_stop_reason,
+    infer_stop,
 )
 from covxplore.generation.tokens import choose_run_token_totals, reconcile_suite_tokens
 from covxplore.observability import (
@@ -272,7 +272,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
     if stop_reason != "agent_done":
         pass
     else:
-        stop_reason = deduce_agent_done_stop_reason(final_suite, config)
+        stop_reason = infer_stop(final_suite, config)
         if stop_reason == "max_iter":
             error_msg = None
             _console.print(
