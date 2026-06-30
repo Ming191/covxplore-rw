@@ -27,13 +27,17 @@ class Settings(BaseSettings):
     kimchi_base_url: str = "https://llm.kimchi.dev/openai/v1"
     kimchi_model: str = "kimi-k2.6"
 
+    # Langfuse/OpenLIT observability
+    langfuse_enabled: bool = False
+    langfuse_host: str = "http://localhost:3000"
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+
     # Generation loop
     max_iterations: int = 15
     max_tokens: int = 4000
     llm_temperature: float = 0.4
 
-    llm_empty_retries: int = 5  # extra attempts when a call returns empty
-    llm_retry_backoff_sec: float = 1.0  # base backoff, grows linearly per attempt
     mcdc_target: float = 1.0  # 1.0 = 100 % MC/DC coverage
     min_suite_size: int = 1  # keep at least this many tests even if redundant
     redundant_streak_limit: int = 3  # early-stop after N consecutive redundant tests

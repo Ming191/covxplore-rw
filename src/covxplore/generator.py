@@ -28,6 +28,7 @@ from covxplore.generation.stop_reasons import (
 )
 from covxplore.generation.tokens import choose_run_token_totals, reconcile_suite_tokens
 from covxplore.llm_logger import LLMInteractionLogger
+from covxplore.observability import flush_observability, init_observability
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.prompts.registry import get_variant
 from covxplore.types import TestSuite
@@ -211,6 +212,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
     llm_logger = LLMInteractionLogger()
 
     try:
+        init_observability()
         static_prompt_data = fetch_static_prompt_data(config.function_path)
         crew_inst, builder = build_crew(
             prompt_config=prompt_config,
@@ -255,6 +257,7 @@ def generate(config: GenerationConfig) -> GenerationResult:
                 tracing_url = getattr(crew_inst.crew(), "_telemetry_url", None)
             except Exception:
                 pass
+        flush_observability()
         final_suite = run_context.get_suite(config.run_id) or suite
         reconcile_suite_tokens(final_suite, token_totals)
 
