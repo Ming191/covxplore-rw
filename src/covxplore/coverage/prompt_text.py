@@ -46,10 +46,11 @@ REDUNDANT_CAUTION_2 = (
     "drive a different code path for the targeted nodeId/polarity."
 )
 TARGETING_ADVICE = (
-    "\nTarget the test path that satisfies the highest number of conditions. "
+    "\nPick one or more listed nodeId/polarity targets before writing code. "
+    "For each target, state the upstream branch/input-state change needed to reach and flip it. "
+    "If a rejected diagnostic says the target node was not evaluated, first change control flow so execution reaches that node. "
     "Prioritize paths that cover multiple uncovered conditions simultaneously. "
-    "If multiple paths are possible, choose the one that increases overall condition coverage the most. "
-    "Prefer modifying an existing passing test when possible, but allow generating a new test if needed."
+    "Do not repeat a rejected redundant path unless you changed upstream state controlling the missed nodeId."
 )
 MAX_STATEMENT_LINES = 15
 MAX_BRANCH_LINES = 15

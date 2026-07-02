@@ -162,24 +162,30 @@ class GenerationResult:
             },
             "tracing_url": self.tracing_url,
             "llm_interactions": self.llm_interactions,
-            "test_suite": [
-                {
-                    "test_name": t.test_name,
-                    "status": t.status,
-                    "new_mcdc_pairs_covered": t.new_mcdc_pairs_covered,
-                    "is_redundant": t.is_redundant,
-                    "iteration": t.iteration,
-                    "elapsed_ms": round(t.elapsed_ms, 1),
-                    "token_input": t.token_input,
-                    "token_output": t.token_output,
-                    "execute_log": t.execute_log,
-                    "test_body": t.test_body,
-                    "mcdc_coverage": t.mcdc_coverage.model_dump(),
-                    "statement_coverage": t.statement_coverage.model_dump(),
-                    "branch_coverage": t.branch_coverage.model_dump(),
-                }
-                for t in self.suite.tests
-            ],
+            "test_suite": [self._test_summary(t) for t in self.suite.tests],
+            "rejected_tests": [self._test_summary(t) for t in self.suite.rejected_tests],
+        }
+
+    @staticmethod
+    def _test_summary(t) -> dict:
+        return {
+            "test_name": t.test_name,
+            "status": t.status,
+            "new_mcdc_pairs_covered": t.new_mcdc_pairs_covered,
+            "is_redundant": t.is_redundant,
+            "iteration": t.iteration,
+            "elapsed_ms": round(t.elapsed_ms, 1),
+            "token_input": t.token_input,
+            "token_output": t.token_output,
+            "execute_log": t.execute_log,
+            "target_node_id": t.target_node_id,
+            "target_polarity": t.target_polarity,
+            "target_reason": t.target_reason,
+            "test_body": t.test_body,
+            "condition_trace": [entry.model_dump() for entry in t.condition_trace],
+            "mcdc_coverage": t.mcdc_coverage.model_dump(),
+            "statement_coverage": t.statement_coverage.model_dump(),
+            "branch_coverage": t.branch_coverage.model_dump(),
         }
 
 

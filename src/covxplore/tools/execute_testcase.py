@@ -411,6 +411,9 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
             else "none"
         )
     )
+    rejected_details = _format_rejected_redundant_details(summary.rejected_redundant)
+    if rejected_details:
+        lines.append(rejected_details)
     metrics = suite.coverage.metrics(suite.tests)
     lines.append(
         f"Suite best → Stmt: {metrics.statement_pct * 100:.0f}% | "
@@ -438,6 +441,55 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
         ).text
     )
     return "\n".join(lines)
+
+
+def _format_rejected_redundant_details(results: list[TestResult]) -> str:
+    if not results:
+        return ""
+    lines = ["Redundant diagnostics (0 new MC/DC pairs):"]
+    for result in results[:3]:
+        target = (
+            f" target=node:{result.target_node_id} {result.target_polarity}"
+            if result.target_node_id is not None
+            else ""
+        )
+        lines.append(f"- {result.test_name}:{target}")
+        target_status = _target_observation_status(result)
+        if target_status:
+            lines.append(f"  Target observation: {target_status}")
+        trace_lines = _condition_trace_lines(result, max_lines=8, preserve_order=True)
+        if trace_lines:
+            lines.append("  Actual condition order:")
+            lines.extend(f"    {line}" for line in trace_lines)
+    if len(results) > 3:
+        lines.append(f"- ... and {len(results) - 3} more redundant candidate(s)")
+    lines.append(
+        "If the target node was not evaluated, change upstream input/state so control reaches that node; "
+        "for parser/iterator/stream-like arguments, initialize cursor/state at the point immediately before the target path, not necessarily object start."
+    )
+    return "\n".join(lines)
+
+
+def _target_observation_status(result: TestResult) -> str:
+    if result.target_node_id is None:
+        return ""
+    target_entries = [e for e in result.condition_trace if e.node_id == result.target_node_id]
+    if not target_entries:
+        return f"node:{result.target_node_id} was not present in trace"
+    entry = target_entries[-1]
+    wanted = (result.target_polarity or "").upper()
+    if wanted == "TRUE":
+        return "target TRUE observed" if entry.true_branch_visited else "target TRUE not observed"
+    if wanted == "FALSE":
+        return "target FALSE observed" if entry.false_branch_visited else "target FALSE not observed"
+    return (
+        f"node:{result.target_node_id} observed TRUE={_yes(entry.true_branch_visited)} "
+        f"FALSE={_yes(entry.false_branch_visited)}"
+    )
+
+
+def _yes(value: bool) -> str:
+    return "YES" if value else "NO"
 
 
 def _format_execution_log(result: TestResult) -> str | None:
@@ -609,31 +661,46 @@ def _format_summary(
 
 
 def _format_condition_trace(result: TestResult) -> str | None:
-    if not result.condition_trace:
+    trace_lines = _condition_trace_lines(result)
+    if not trace_lines or is_failure_status(result.status):
         return None
-    if is_failure_status(result.status):
-        return None
+    return "\n".join(["Condition evaluation this test:", *trace_lines])
 
-    lines = ["Condition evaluation this test:"]
-    sorted_trace = sorted(
-        result.condition_trace,
-        key=lambda e: (
-            *_sort_value(e.node_id),
-            *_sort_value(e.line_in_function),
-            e.condition,
-        ),
-    )
-    for entry in sorted_trace:
-        t_mark = "YES" if entry.true_branch_visited else "NO"
-        f_mark = "YES" if entry.false_branch_visited else "NO"
+
+def _condition_trace_lines(
+    result: TestResult,
+    max_lines: int | None = None,
+    *,
+    preserve_order: bool = False,
+) -> list[str]:
+    if not result.condition_trace:
+        return []
+    entries = list(result.condition_trace)
+    if not preserve_order:
+        entries = sorted(
+            entries,
+            key=lambda e: (
+                *_sort_value(e.node_id),
+                *_sort_value(e.line_in_function),
+                e.condition,
+            ),
+        )
+    if max_lines is not None:
+        entries = entries[:max_lines]
+    lines = []
+    for index, entry in enumerate(entries, start=1):
+        t_mark = _yes(entry.true_branch_visited)
+        f_mark = _yes(entry.false_branch_visited)
         node_tag = entry.node_id if entry.node_id is not None else "?"
         line_tag = (
             f"line+{entry.line_in_function}"
             if entry.line_in_function is not None
             else "line+?"
         )
+        prefix = f"{index}. " if preserve_order else ""
         lines.append(
-            f"  [node:{node_tag} {line_tag}] {entry.condition!r} TRUE={t_mark} FALSE={f_mark}"
+            f"{prefix}[node:{node_tag} {line_tag}] {entry.condition!r} TRUE={t_mark} FALSE={f_mark}"
         )
-
-    return "\n".join(lines)
+    if max_lines is not None and len(result.condition_trace) > max_lines:
+        lines.append(f"... and {len(result.condition_trace) - max_lines} more")
+    return lines

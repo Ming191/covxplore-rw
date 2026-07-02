@@ -34,3 +34,4 @@ src/covxplore/prompts/sections/*_gtest.txt
 
 # Test run outputs
 test_results/
+batches

@@ -62,7 +62,9 @@ def merge_batch_results(
     for _, result in ranked:
         gain = _marginal_gain(suite, result)
         if _is_coverage_result(result) and gain == 0:
+            result.is_redundant = True
             summary.rejected_redundant.append(result)
+            suite.rejected_tests.append(result)
             continue
 
         suite.add_result(result, min_suite_size=min_suite_size)

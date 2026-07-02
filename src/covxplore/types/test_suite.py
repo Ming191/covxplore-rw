@@ -12,6 +12,7 @@ class TestSuite:
     function_path: str
 
     tests: list[TestResult] = field(default_factory=list)
+    rejected_tests: list[TestResult] = field(default_factory=list)
     coverage: CoverageState = field(default_factory=CoverageState)
     iteration_count: int = 0
     fail_streak: int = 0
@@ -75,4 +76,5 @@ class TestSuite:
             "total_output_tokens": self.total_output_tokens,
             "elapsed_sec": round(self.elapsed_sec, 2),
             "tests": [t.model_dump() for t in self.tests],
+            "rejected_tests": [t.model_dump() for t in self.rejected_tests],
         }
