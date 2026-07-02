@@ -14,6 +14,7 @@ class TestSuite:
     tests: list[TestResult] = field(default_factory=list)
     coverage: CoverageState = field(default_factory=CoverageState)
     iteration_count: int = 0
+    fail_streak: int = 0
     started_at: float = field(default_factory=time.monotonic)
 
     def add_result(self, result: TestResult, min_suite_size: int = 3) -> None:
@@ -47,20 +48,19 @@ class TestSuite:
     def non_redundant_tests(self) -> list[TestResult]:
         return [t for t in self.tests if not t.is_redundant]
 
+    def mark_iter(self, failed: bool) -> None:
+        self.fail_streak = self.fail_streak + 1 if failed else 0
+
     def consecutive_failures(self) -> int:
-        """Count consecutive non-passing tests from the end of the suite."""
-        count = 0
-        for t in reversed(self.tests):
-            if t.status == "PASSED":
-                break
-            count += 1
-        return count
+        """Count consecutive failing tool iterations, not individual test cases."""
+        return self.fail_streak
 
     def to_dict(self) -> dict:
         metrics = self.coverage.metrics(self.tests)
         return {
             "function_path": self.function_path,
             "iteration_count": self.iteration_count,
+            "fail_streak": self.fail_streak,
             "statement_coverage_pct": round(metrics.statement_pct, 4),
             "branch_coverage_pct": round(metrics.branch_pct, 4),
             "covered_statements": metrics.covered_statements,

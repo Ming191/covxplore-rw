@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 
 from covxplore.driver.executor import TestCaseExecutor
-from covxplore.status import TestStatus, normalize_test_status
+from covxplore.status import TestStatus, is_failure_status, normalize_test_status
 from covxplore.types.test_result import TestResult
 from covxplore.types.test_suite import TestSuite
 
@@ -28,7 +28,9 @@ class BatchMergeSummary:
             return
         if any(_is_coverage_result(result) and not result.is_redundant for result in self.accepted):
             return
-        suite.coverage.consecutive_redundant += len(self.rejected_redundant)
+        if any(is_failure_status(result.status) for result in self.accepted):
+            return
+        suite.coverage.consecutive_redundant += 1
 
 
 def _marginal_gain(suite: TestSuite, result: TestResult) -> int:

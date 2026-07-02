@@ -74,10 +74,12 @@ def trace_observation(name: str, **metadata: Any) -> Iterator[str | None]:
         yield None
         return
     with observation as span:
+        tracing_url = None
         try:
-            yield _client.get_trace_url(trace_id=getattr(span, "trace_id", None))
+            tracing_url = _client.get_trace_url(trace_id=getattr(span, "trace_id", None))
         except Exception:
-            yield None
+            pass
+        yield tracing_url
 
 
 def get_trace_url() -> str | None:

@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     mcdc_target: float = 1.0  # 1.0 = 100 % MC/DC coverage
     min_suite_size: int = 1  # keep at least this many tests even if redundant
     redundant_streak_limit: int = 3  # early-stop after N consecutive redundant tests
-    fail_streak_limit: int = 5  # early-stop after N consecutive failing tests (0 passing)
+    fail_streak_limit: int = 3  # early-stop after N consecutive failing tool iterations
     request_timeout_sec: int = 120  # per REST call
 
     # Ablation

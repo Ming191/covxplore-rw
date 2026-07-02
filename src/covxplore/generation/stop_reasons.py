@@ -38,7 +38,7 @@ def infer_stop(suite, config) -> StopReason:
         return "coverage_target"
     if suite.coverage.consecutive_redundant >= config.redundant_streak_limit:
         return "redundant_streak"
-    fail_limit: int = getattr(config, "fail_streak_limit", 5)
+    fail_limit: int = getattr(config, "fail_streak_limit", 3)
     if suite.consecutive_failures() >= fail_limit:
         return "fail_streak"
     if suite.iteration_count >= config.max_iterations:

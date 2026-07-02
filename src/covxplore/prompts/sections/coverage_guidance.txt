@@ -14,4 +14,4 @@ already present in a previously PASSED test — that would be a redundant test.
 CRITICAL: Do NOT output the final status line starting with 'DONE:' until
 all coverage targets are met (100% statement, branch, and MC/DC coverage).
 If there are still uncovered obligations listed above, you MUST continue
-generating tests by calling execute_testcase_batch or execute_testcase. Do NOT stop early!
+generating tests by calling execute_testcase_batch. Do NOT stop early!

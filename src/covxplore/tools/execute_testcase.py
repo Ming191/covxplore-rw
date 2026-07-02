@@ -70,7 +70,7 @@ def _is_coverage_done(suite: TestSuite, mcdc_target: float) -> bool:
 def _raise_if_hard_stop(suite: TestSuite, cfg: object) -> None:
     """Raise HardStop immediately after redundant streak, fail streak, or coverage target."""
     redundant_limit: int = getattr(cfg, "redundant_streak_limit", 3)
-    fail_limit: int = getattr(cfg, "fail_streak_limit", 5)
+    fail_limit: int = getattr(cfg, "fail_streak_limit", 3)
     mcdc_target: float = getattr(cfg, "mcdc_target", 1.0)
 
     if suite.coverage.consecutive_redundant >= redundant_limit:
@@ -194,6 +194,8 @@ class ExecuteTestcaseTool(BaseTool):
             )
             if suite:
                 suite.add_result(failed, cfg.min_suite_size)
+                suite.mark_iter(True)
+                _raise_if_hard_stop(suite, cfg)
             return (
                 "[CONTRACT_ERROR] execute_testcase rejected test body before execution:\n"
                 f"{_format_contract_violations(violations)}\n"
@@ -219,6 +221,8 @@ class ExecuteTestcaseTool(BaseTool):
                 )
                 if suite:
                     suite.add_result(failed, cfg.min_suite_size)
+                    suite.mark_iter(True)
+                    _raise_if_hard_stop(suite, cfg)
                 return (
                     f"[COMPILE_ERROR] execute_testcase failed: {exc}\n"
                     "Review the test body for syntax errors, missing includes, or "
@@ -243,6 +247,7 @@ class ExecuteTestcaseTool(BaseTool):
 
         if suite:
             suite.add_result(result, cfg.min_suite_size)
+            suite.mark_iter(is_failure_status(result.status))
             _raise_if_hard_stop(suite, cfg)
 
         return _format_summary(result, suite, action_validation.warnings)
@@ -251,7 +256,7 @@ class ExecuteTestcaseTool(BaseTool):
 class ExecuteTestcaseBatchTool(BaseTool):
     name: str = "execute_testcase_batch"
     description: str = (
-        "Compile and execute a small batch of 1-5 C++ test driver bodies for the active target function. "
+        "Compile and execute a small batch of 1-3 C++ test driver bodies for the active target function. "
         "Prefer distinct nodeId/polarity targets. Returns accepted tests, redundant rejections, "
         "suite coverage, and remaining gap guidance."
     )
@@ -309,6 +314,9 @@ class ExecuteTestcaseBatchTool(BaseTool):
 
         summary = merge_batch_results(suite, results, cfg.min_suite_size)
         summary.record_redundancy(suite)
+        suite.mark_iter(
+            bool(results) and all(is_failure_status(result.status) for result in results)
+        )
         _raise_if_hard_stop(suite, cfg)
         return _format_batch_summary(suite, summary)
 
@@ -411,6 +419,18 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
         f"({metrics.mcdc_pct * 100:.0f}%) | "
         f"iter={suite.iteration_count} | redundancy={suite.redundancy_rate * 100:.0f}%"
     )
+
+    failed_logs = [
+        _format_execution_log(result)
+        for result in summary.accepted
+        if is_failure_status(result.status)
+    ]
+    failed_logs = [log for log in failed_logs if log]
+    if failed_logs:
+        lines.append("")
+        lines.append("Failed execution logs:")
+        lines.extend(failed_logs)
+
     lines.append("")
     lines.append(
         GapAnalyzer().analyze(
@@ -418,6 +438,17 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
         ).text
     )
     return "\n".join(lines)
+
+
+def _format_execution_log(result: TestResult) -> str | None:
+    if not result.execute_log:
+        return None
+    log = result.execute_log.strip()
+    if not log:
+        return None
+    if len(log) > 2000:
+        log = "...<truncated>...\n" + log[-2000:]
+    return f"--- {result.test_name} | {result.status} ---\n{log}"
 
 
 def _result_from_execute_result(
@@ -569,8 +600,10 @@ def _format_summary(
         lines.append("")
         lines.append(trace_block)
 
-    if is_failure_status(result.status) and result.execute_log:
-        lines.append(f"\nExecution log:\n{result.execute_log.strip()}")
+    if is_failure_status(result.status):
+        log = _format_execution_log(result)
+        if log:
+            lines.append(f"\nExecution log:\n{log}")
 
     return "\n".join(lines)
 

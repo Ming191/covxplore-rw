@@ -37,10 +37,18 @@ def test_merge_recomputes_gain_and_rejects_redundant_overlap():
     assert suite.coverage._covered_keys == {ConditionKey(1, True)}
 
 
-def test_summary_records_rejected_redundant_streak():
+def test_summary_records_rejected_redundant_streak_per_batch():
     suite = TestSuite(function_path="/f.cpp::f()")
     suite.coverage.consecutive_redundant = 2
-    summary = merge_batch_results(suite, [_result("dupe", "PASSED", [])], min_suite_size=0)
+    summary = merge_batch_results(
+        suite,
+        [
+            _result("dupe1", "PASSED", []),
+            _result("dupe2", "PASSED", []),
+            _result("dupe3", "PASSED", []),
+        ],
+        min_suite_size=0,
+    )
 
     summary.record_redundancy(suite)
 
@@ -60,6 +68,20 @@ def test_summary_keeps_progress_reset_when_batch_has_progress():
     assert summary.accepted == [progress]
     assert summary.rejected_redundant == [dupe]
     assert suite.coverage.consecutive_redundant == 0
+
+
+def test_summary_does_not_count_failed_batch_as_redundant_streak():
+    suite = TestSuite(function_path="/f.cpp::f()")
+    suite.coverage.consecutive_redundant = 2
+    failed = _result("failed", "FAILED", [], "bad();")
+    dupe = _result("dupe", "PASSED", [], "dupe();")
+    summary = merge_batch_results(suite, [failed, dupe], min_suite_size=0)
+
+    summary.record_redundancy(suite)
+
+    assert summary.accepted == [failed]
+    assert summary.rejected_redundant == [dupe]
+    assert suite.coverage.consecutive_redundant == 2
 
 
 def test_merge_accepts_non_passing_results_for_visibility():

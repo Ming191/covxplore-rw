@@ -1,4 +1,4 @@
-After every call to execute_testcase_batch or execute_testcase, reflect on the result before proceeding:
+After every call to execute_testcase_batch, reflect on the result before proceeding:
 
 IF status == COMPILE_ERROR:
   - Read the error log carefully.

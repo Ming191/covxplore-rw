@@ -288,9 +288,9 @@ def generate(config: GenerationConfig) -> GenerationResult:
             _console.print("[green]Stopped gracefully: reached coverage target[/]")
         elif stop_reason == "fail_streak":
             error_msg = None
-            fail_limit: int = getattr(config, "fail_streak_limit", 5)
+            fail_limit: int = getattr(config, "fail_streak_limit", 3)
             _console.print(
-                f"[red]Hard stop: {fail_limit} consecutive failing tests[/]"
+                f"[red]Hard stop: {fail_limit} consecutive failing tool iterations[/]"
             )
 
     result = GenerationResult(

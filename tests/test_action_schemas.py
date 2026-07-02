@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from covxplore.agents import GenerateTestAction, validate_tool_input
+from covxplore.agents.schemas import GenerateTestBatchAction
 
 
 def _valid_payload(**overrides):
@@ -76,3 +77,10 @@ def test_validate_action_warns_when_target_reason_missing():
 
     assert result.ok is True
     assert "target_polarity provided without target_reason" in result.warnings
+
+
+def test_generate_test_batch_action_rejects_more_than_three_candidates():
+    with pytest.raises(ValidationError):
+        GenerateTestBatchAction.model_validate(
+            {"candidates": [_valid_payload(test_name=f"t{i}") for i in range(4)]}
+        )

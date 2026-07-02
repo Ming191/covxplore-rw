@@ -386,19 +386,81 @@ class TestExecuteTestcaseBatchTool:
             [
                 {"test_body": "f(1);", "test_name": "first"},
                 {"test_body": "f(1);", "test_name": "dupe"},
-                {"test_body": "f(2);", "test_name": "second"},
                 {"test_body": "```cpp\nf();\n```", "test_name": "bad"},
             ]
         )
 
-        assert len(executor.calls) == 3
+        assert len(executor.calls) == 2
         assert ("/x.cpp::f()", "f(1);", "first") in executor.calls
         assert ("/x.cpp::f()", "f(1);", "dupe") in executor.calls
-        assert ("/x.cpp::f()", "f(2);", "second") in executor.calls
         assert "Accepted:" in output
         assert "Rejected redundant: dupe" in output
-        assert [test.test_name for test in suite.tests] == ["second", "first", "bad"]
+        assert [test.test_name for test in suite.tests] == ["first", "bad"]
         assert suite.tests[-1].status == TestStatus.COMPILE_ERROR.value
+
+    def test_batch_reports_failed_logs_per_test_name(self):
+        class Executor:
+            def execute(self, absolute_path: str, test_body: str, test_name: str | None = None):
+                return ExecuteResult(
+                    raw={
+                        "testName": test_name,
+                        "status": "FAILED",
+                        "executeLog": f"stderr for {test_name}",
+                    }
+                )
+
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+
+        output = ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())._run(
+            [
+                {"test_body": "bad1();", "test_name": "bad1"},
+                {"test_body": "bad2();", "test_name": "bad2"},
+            ]
+        )
+
+        assert "Failed execution logs:" in output
+        assert "--- bad1 | FAILED ---" in output
+        assert "stderr for bad1" in output
+        assert "--- bad2 | FAILED ---" in output
+        assert "stderr for bad2" in output
+
+    def test_batch_fail_streak_counts_batches_not_candidates(self, monkeypatch):
+        class Executor:
+            def execute(self, absolute_path: str, test_body: str, test_name: str | None = None):
+                raise AkaUTError("compile error")
+
+        settings = type(
+            "Settings",
+            (),
+            {
+                "min_suite_size": 0,
+                "redundant_streak_limit": 3,
+                "fail_streak_limit": 3,
+                "mcdc_target": 1.0,
+            },
+        )()
+        monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
+        ctx = RunContext()
+        suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+        tool = ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())
+        batch = [
+            {"test_body": "bad1();", "test_name": "bad1"},
+            {"test_body": "bad2();", "test_name": "bad2"},
+            {"test_body": "bad3();", "test_name": "bad3"},
+        ]
+
+        assert "Accepted:" in tool._run(batch)
+        assert suite.consecutive_failures() == 1
+        assert len(suite.tests) == 3
+        assert "Accepted:" in tool._run(batch)
+        assert suite.consecutive_failures() == 2
+        with pytest.raises(HardStop) as exc:
+            tool._run(batch)
+
+        assert exc.value.reason == "fail_streak"
+        assert suite.consecutive_failures() == 3
+        assert len(suite.tests) == 9
 
     def test_batch_arun_hard_stops_on_rejected_redundant(self, monkeypatch):
         class Executor:

@@ -86,7 +86,7 @@ def build_crew(
 
     tools = [
         ExecuteTestcaseBatchTool(run_context=run_context),
-        ExecuteTestcaseTool(run_context=run_context),
+#         ExecuteTestcaseTool(run_context=run_context),
         GetNodeSourceTool(),
         SearchNodesTool(),
     ]
