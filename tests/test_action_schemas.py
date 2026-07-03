@@ -79,8 +79,12 @@ def test_validate_action_warns_when_target_reason_missing():
     assert "target_polarity provided without target_reason" in result.warnings
 
 
-def test_generate_test_batch_action_rejects_more_than_three_candidates():
+def test_generate_test_batch_action_rejects_more_than_five_candidates():
+    GenerateTestBatchAction.model_validate(
+        {"candidates": [_valid_payload(test_name=f"t{i}") for i in range(5)]}
+    )
+
     with pytest.raises(ValidationError):
         GenerateTestBatchAction.model_validate(
-            {"candidates": [_valid_payload(test_name=f"t{i}") for i in range(4)]}
+            {"candidates": [_valid_payload(test_name=f"t{i}") for i in range(6)]}
         )

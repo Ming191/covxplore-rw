@@ -256,7 +256,7 @@ class ExecuteTestcaseTool(BaseTool):
 class ExecuteTestcaseBatchTool(BaseTool):
     name: str = "execute_testcase_batch"
     description: str = (
-        "Compile and execute a small batch of 1-3 C++ test driver bodies for the active target function. "
+        "Compile and execute a batch of 3-5 C++ test driver bodies for the active target function. "
         "Prefer distinct nodeId/polarity targets. Returns accepted tests, redundant rejections, "
         "suite coverage, and remaining gap guidance."
     )

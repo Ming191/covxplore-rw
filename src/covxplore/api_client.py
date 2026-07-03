@@ -30,6 +30,11 @@ class ContextResult:
 
 
 @dataclass
+class ContextV2Result:
+    raw: dict[str, Any]
+
+
+@dataclass
 class SourceResult:
     source: str
     value: str | None = None
@@ -150,6 +155,13 @@ class AkaUTClient:
         if "error" in data:
             raise AkaUTError(data["error"])
         return ContextResult(context=data["context"])
+
+    def get_function_context_v2(self, absolute_path: str) -> ContextV2Result:
+        absolute_path = absolute_path.replace("\\", "/")
+        data = self._post("/api/context-v2", {"absolutePath": absolute_path})
+        if "error" in data:
+            raise AkaUTError(data["error"])
+        return ContextV2Result(raw=data)
 
     def get_node_source(self, absolute_path: str) -> SourceResult:
         absolute_path = absolute_path.replace("\\", "/")

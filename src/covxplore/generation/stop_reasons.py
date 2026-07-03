@@ -9,6 +9,7 @@ StopReason = Literal[
     "redundant_streak",
     "fail_streak",
     "agent_done",
+    "guardrail_incomplete",
     "error",
 ]
 

@@ -34,8 +34,10 @@ class SearchNodesTool(BaseTool):
     description: str = (
         "Search the loaded C/C++ project AST for nodes matching a name query. "
         "Optionally filter by node type (FUNCTION, STRUCT, ENUM, etc.). "
-        "Returns absolutePath values you can pass to get_node_source or "
-        "get_function_context."
+        "Pass only source-backed absolutePath values (FUNCTION, STRUCT, CLASS, ENUM, "
+        "TYPEDEF, MACRO) to get_node_source. Do not call get_node_source for "
+        "VARIABLE/GLOBAL_VAR member-field paths like .../Struct/field; variables have "
+        "no function body. If a search returns no nodes, do not retry query variants."
     )
     args_schema: type[BaseModel] = _Input
 

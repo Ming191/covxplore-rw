@@ -66,6 +66,6 @@ class GenerateTestBatchAction(BaseModel):
     candidates: list[GenerateTestAction] = Field(
         ...,
         min_length=1,
-        max_length=3,
-        description="Small batch of 1-3 distinct test candidates to execute concurrently.",
+        max_length=5,
+        description="Batch of 3-5 distinct test candidates to execute concurrently; use fewer only when fewer useful targets remain.",
     )

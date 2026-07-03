@@ -256,10 +256,14 @@ def generate(config: GenerationConfig) -> GenerationResult:
         _console.print(f"[green]Hard stop ({e.reason}): {e}[/]")
 
     except BaseException as e:
-        stop_reason = "error"
         error_msg = f"{type(e).__name__}: {e}"
-        _console.print(f"[red]Error: {error_msg}[/]")
-        traceback.print_exc()
+        if "Task failed guardrail validation" in str(e):
+            stop_reason = "guardrail_incomplete"
+            _console.print(f"[yellow]Stopped: {error_msg}[/]")
+        else:
+            stop_reason = "error"
+            _console.print(f"[red]Error: {error_msg}[/]")
+            traceback.print_exc()
 
     finally:
         token_totals = choose_run_token_totals(crew_inst)

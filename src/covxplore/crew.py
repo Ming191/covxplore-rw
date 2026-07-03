@@ -12,6 +12,26 @@ from covxplore.tools import SearchNodesTool, GetNodeSourceTool, ExecuteTestcaseB
 from covxplore.tools.execute_testcase import RunContext
 
 
+def _guard(ctx: RunContext, max_iterations: int, max_forces: int = 3):
+    forced = 0
+
+    def check(output):
+        nonlocal forced
+        suite = ctx.active_suite()
+        if suite is not None and suite.iteration_count >= max_iterations:
+            return True, output
+        if forced >= max_forces:
+            return True, output
+
+        forced += 1
+        return False, (
+            "Final answer emitted before a hard stop. "
+            "Do not finish yet; call execute_testcase_batch."
+        )
+
+    return check
+
+
 @CrewBase
 class CovxploreCrew:
     """Single-agent crew for MC/DC coverage-driven test generation.
@@ -33,8 +53,10 @@ class CovxploreCrew:
         tools: list[BaseTool],
         llm: LLM | str | None = None,
         max_iterations: int | None = None,
+        run_context: RunContext | None = None,
     ):
         self._tools = tools
+        self._run_context = run_context
 
         cfg = get_settings()
         resolved_max_iterations = (
@@ -60,8 +82,15 @@ class CovxploreCrew:
 
     @task
     def generate_tests(self) -> Task:
+        guardrail = (
+            _guard(self._run_context, self._max_iterations)
+            if self._run_context is not None
+            else None
+        )
         return Task(
             config=self.tasks_config["generate_tests"],  # type: ignore[index]
+            guardrail=guardrail,
+            guardrail_max_retries=3,
         )
 
     @crew
@@ -91,5 +120,9 @@ def build_crew(
         SearchNodesTool(),
     ]
 
-    crew_inst = CovxploreCrew(tools=tools, max_iterations=max_iterations)
+    crew_inst = CovxploreCrew(
+        tools=tools,
+        max_iterations=max_iterations,
+        run_context=run_context,
+    )
     return crew_inst, builder

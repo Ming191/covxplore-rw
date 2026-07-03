@@ -79,10 +79,10 @@ class PromptBuilder:
             f"  {function_path}\n\n"
             "Workflow:\n"
             "Use the preloaded static data below as ground truth (conditions, context, source).\n"
-            "Start by calling execute_testcase_batch with exactly 3 focused test bodies; do not search before the first execution.\n"
+            "Start by calling execute_testcase_batch with 3-5 focused test bodies; do not search before the first execution.\n"
             "If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol.\n"
             "Do NOT call static condition/context fetch tools again; they are already provided below.\n"
-            "Prefer execute_testcase_batch with exactly 3 focused test bodies targeting distinct obligations; use execute_testcase only for a single fallback or when fewer than 3 useful candidates remain.\n"
+            "Prefer execute_testcase_batch with 3-5 focused test bodies targeting distinct obligations; use fewer only when fewer useful candidates remain.\n"
             "After each execution, use coverage feedback to target the next uncovered statements, branches, or conditions."
             + (
                 "\nIn each batch, target distinct uncovered nodeId/polarity obligations."
