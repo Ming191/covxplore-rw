@@ -2,7 +2,7 @@
 
 import pytest
 
-from covxplore.status import TestStatus, is_failure_status, normalize_test_status
+from covxplore.status import TestStatus, is_failure_status, is_hard_fail, normalize_test_status
 
 
 class TestTestStatusEnum:
@@ -90,3 +90,22 @@ class TestIsFailureStatus:
     )
     def test_failure_detection(self, status, expected):
         assert is_failure_status(status) == expected
+
+
+class TestIsHardFail:
+    @pytest.mark.parametrize(
+        "status,expected",
+        [
+            ("PASSED", False),
+            (TestStatus.RUNTIME_ERROR, False),
+            ("runtime error", False),
+            ("FAILED", True),
+            (TestStatus.FAILED, True),
+            ("compile error", True),
+            (TestStatus.COMPILE_ERROR, True),
+            ("UNKNOWN", True),
+            (TestStatus.UNKNOWN, True),
+        ],
+    )
+    def test_hard_fail_detection(self, status, expected):
+        assert is_hard_fail(status) == expected

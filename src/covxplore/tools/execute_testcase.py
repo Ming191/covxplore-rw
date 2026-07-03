@@ -27,7 +27,7 @@ from covxplore.types import (
 )
 from covxplore.coverage.gap_analyzer import GapAnalyzer
 from covxplore.generation.batch import merge_batch_results
-from covxplore.status import TestStatus, is_failure_status
+from covxplore.status import TestStatus, is_failure_status, is_hard_fail
 
 
 logger = logging.getLogger(__name__)
@@ -247,7 +247,7 @@ class ExecuteTestcaseTool(BaseTool):
 
         if suite:
             suite.add_result(result, cfg.min_suite_size)
-            suite.mark_iter(is_failure_status(result.status))
+            suite.mark_iter(is_hard_fail(result.status))
             _raise_if_hard_stop(suite, cfg)
 
         return _format_summary(result, suite, action_validation.warnings)
@@ -315,7 +315,7 @@ class ExecuteTestcaseBatchTool(BaseTool):
         summary = merge_batch_results(suite, results, cfg.min_suite_size)
         summary.record_redundancy(suite)
         suite.mark_iter(
-            bool(results) and all(is_failure_status(result.status) for result in results)
+            bool(results) and all(is_hard_fail(result.status) for result in results)
         )
         _raise_if_hard_stop(suite, cfg)
         return _format_batch_summary(suite, summary)

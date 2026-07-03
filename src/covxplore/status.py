@@ -43,3 +43,13 @@ def is_failure_status(status: str | TestStatus) -> bool:
         TestStatus.RUNTIME_ERROR,
         TestStatus.COMPILE_ERROR,
     }
+
+
+def is_hard_fail(status: str | TestStatus) -> bool:
+    """Return True when status should increment generation fail streak."""
+    normalized = status if isinstance(status, TestStatus) else normalize_test_status(status)
+    return normalized in {
+        TestStatus.FAILED,
+        TestStatus.COMPILE_ERROR,
+        TestStatus.UNKNOWN,
+    }
