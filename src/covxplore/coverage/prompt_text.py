@@ -16,7 +16,7 @@ FAILED = (
 )
 UNKNOWN = (
     "Last execution status is UNKNOWN. Coverage state may be incomplete. "
-    "Do NOT stop. Re-run with a valid test and continue."
+    "Inspect execute_log, then re-run with a valid test and continue."
 )
 SUCCESS_PREFIX = "SUCCESS! All coverage targets are now met (statement, branch"
 SUCCESS_SUFFIX = (

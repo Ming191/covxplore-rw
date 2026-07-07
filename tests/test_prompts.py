@@ -118,6 +118,25 @@ class TestGetVariant:
         assert cfg.name == "full"
         assert cfg.role_persona is True
 
+    def test_no_search_variant_disables_search_tools(self):
+        cfg = get_variant("no_search")
+
+        assert cfg.search_tools is False
+
+    def test_minimal_context_search_keeps_search_without_preloaded_context(self):
+        cfg = get_variant("minimal_context_search")
+
+        assert cfg.search_tools is True
+        assert cfg.preload_context is False
+        assert cfg.self_reflection is False
+
+    def test_no_search_unlimited_disables_search_and_batch_cap(self):
+        cfg = get_variant("no_search_unlimited")
+
+        assert cfg.search_tools is False
+        assert cfg.unlimited_batch is True
+        assert cfg.self_reflection is False
+
     def test_all_registered_variants_resolve(self):
         for name in VARIANTS:
             cfg = get_variant(name)
@@ -137,8 +156,9 @@ class TestGetLeaveOneOutVariants:
     def test_includes_no_prefixes(self):
         variants = get_leave_one_out_variants()
         for name in VARIANTS:
-            if name.startswith("no_"):
+            if name.startswith("no_") and name != "no_search":
                 assert name in variants, f"{name} missing from leave-one-out"
+        assert "no_search" not in variants
 
     def test_excludes_single_section_variants(self):
         variants = get_leave_one_out_variants()
@@ -173,3 +193,12 @@ class TestPromptBuilderTaskDescription:
 
         assert "Run id" not in text
         assert "execute_testcase call MUST include" not in text
+
+    def test_no_search_task_description_removes_search_workflow(self):
+        builder = PromptBuilder(PromptConfig("no_search", search_tools=False))
+
+        text = builder.task_description(function_path="/x.cpp::f()")
+
+        assert "No search/source tools are available" in text
+        assert "preloaded conditions, source" in text
+        assert "search_nodes then get_node_source" not in text

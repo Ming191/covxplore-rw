@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from covxplore.agents import GenerateTestAction, validate_tool_input
-from covxplore.agents.schemas import GenerateTestBatchAction
+from covxplore.agents.schemas import GenerateTestBatchAction, GenerateTestBatchAnyAction
 
 
 def _valid_payload(**overrides):
@@ -88,3 +88,11 @@ def test_generate_test_batch_action_rejects_more_than_five_candidates():
         GenerateTestBatchAction.model_validate(
             {"candidates": [_valid_payload(test_name=f"t{i}") for i in range(6)]}
         )
+
+
+def test_generate_test_batch_any_action_accepts_more_than_five_candidates():
+    action = GenerateTestBatchAnyAction.model_validate(
+        {"candidates": [_valid_payload(test_name=f"t{i}") for i in range(8)]}
+    )
+
+    assert len(action.candidates) == 8

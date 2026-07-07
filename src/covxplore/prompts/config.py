@@ -26,6 +26,9 @@ class PromptConfig:
     self_reflection: bool = True    # S4
     few_shot_examples: bool = False # S5 — off by default (token-expensive)
     output_format: bool = True      # S6
+    search_tools: bool = True
+    preload_context: bool = True
+    unlimited_batch: bool = False
 
     def enabled_sections(self) -> list[str]:
         """Return ordered list of section names that are enabled."""

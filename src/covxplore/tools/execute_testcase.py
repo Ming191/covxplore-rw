@@ -4,13 +4,17 @@ import logging
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, ClassVar, Mapping
 
 from crewai.tools import BaseTool
 from pydantic import BaseModel, PrivateAttr, ValidationError
 
 from covxplore.agents.guardrails import validate_tool_input
-from covxplore.agents.schemas import GenerateTestAction, GenerateTestBatchAction
+from covxplore.agents.schemas import (
+    GenerateTestAction,
+    GenerateTestBatchAction,
+    GenerateTestBatchAnyAction,
+)
 from covxplore.api_client import AkaUTError, ExecuteResult
 from covxplore.config import get_settings
 from covxplore.driver.contract import ContractViolation
@@ -261,6 +265,7 @@ class ExecuteTestcaseBatchTool(BaseTool):
         "suite coverage, and remaining gap guidance."
     )
     args_schema: type[BaseModel] = GenerateTestBatchAction
+    batch_schema: ClassVar[type[BaseModel]] = GenerateTestBatchAction
 
     _run_context: RunContext = PrivateAttr(default_factory=RunContext)
     _executor: TestCaseExecutor = PrivateAttr(default_factory=AkaUTExecutor)
@@ -291,7 +296,7 @@ class ExecuteTestcaseBatchTool(BaseTool):
             )
 
         try:
-            batch = GenerateTestBatchAction.model_validate({"candidates": candidates})
+            batch = self.batch_schema.model_validate({"candidates": candidates})
         except ValidationError as exc:
             return "[ACTION_ERROR] Invalid execute_testcase_batch action:\n" + "\n".join(
                 f"- {_format_validation_error(error)}" for error in exc.errors()
@@ -359,6 +364,16 @@ class ExecuteTestcaseBatchTool(BaseTool):
         )
 
 
+class ExecuteTestcaseBatchAnyTool(ExecuteTestcaseBatchTool):
+    description: str = (
+        "Compile and execute one broad batch of C++ test driver bodies for the active target function. "
+        "Use one distinct candidate per uncovered nodeId/polarity obligation; avoid duplicate path shapes. "
+        "Large batches are allowed for one-shot coverage planning but produce long feedback."
+    )
+    args_schema: type[BaseModel] = GenerateTestBatchAnyAction
+    batch_schema: ClassVar[type[BaseModel]] = GenerateTestBatchAnyAction
+
+
 def _is_compile_or_test_body_error(exc: AkaUTError) -> bool:
     message = str(exc).lower()
     compile_markers = (
@@ -369,6 +384,11 @@ def _is_compile_or_test_body_error(exc: AkaUTError) -> bool:
         "testbody",
         "missing include",
         "incorrect variable type",
+        "cannot find",
+        ".cpp.out",
+        "ld returned",
+        "collect2",
+        "file not recognized",
     )
     return any(marker in message for marker in compile_markers)
 
@@ -426,7 +446,7 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
     failed_logs = [
         _format_execution_log(result)
         for result in summary.accepted
-        if is_failure_status(result.status)
+        if result.status != TestStatus.PASSED.value
     ]
     failed_logs = [log for log in failed_logs if log]
     if failed_logs:
@@ -652,7 +672,7 @@ def _format_summary(
         lines.append("")
         lines.append(trace_block)
 
-    if is_failure_status(result.status):
+    if result.status != TestStatus.PASSED.value:
         log = _format_execution_log(result)
         if log:
             lines.append(f"\nExecution log:\n{log}")

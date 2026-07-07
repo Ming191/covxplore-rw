@@ -69,3 +69,13 @@ class GenerateTestBatchAction(BaseModel):
         max_length=5,
         description="Batch of 3-5 distinct test candidates to execute concurrently; use fewer only when fewer useful targets remain.",
     )
+
+
+class GenerateTestBatchAnyAction(BaseModel):
+    """Schema for exploratory one-shot batches without a fixed candidate cap."""
+
+    candidates: list[GenerateTestAction] = Field(
+        ...,
+        min_length=1,
+        description="Batch of distinct test candidates; use one candidate per useful uncovered obligation and avoid duplicates.",
+    )

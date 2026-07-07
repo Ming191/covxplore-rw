@@ -116,6 +116,35 @@ VARIANTS: dict[str, PromptConfig] = {
         self_reflection=False,
         output_format=True,
     ),
+    "no_search": PromptConfig(
+        "no_search",
+        role_persona=True,
+        cot_reasoning=True,
+        coverage_guidance=True,
+        self_reflection=False,
+        output_format=True,
+        search_tools=False,
+    ),
+    "minimal_context_search": PromptConfig(
+        "minimal_context_search",
+        role_persona=True,
+        cot_reasoning=True,
+        coverage_guidance=True,
+        self_reflection=False,
+        output_format=True,
+        search_tools=True,
+        preload_context=False,
+    ),
+    "no_search_unlimited": PromptConfig(
+        "no_search_unlimited",
+        role_persona=True,
+        cot_reasoning=True,
+        coverage_guidance=True,
+        self_reflection=False,
+        output_format=True,
+        search_tools=False,
+        unlimited_batch=True,
+    ),
     "no_format": PromptConfig(
         "no_format",
         role_persona=True,
@@ -159,5 +188,5 @@ def get_variant(name: str) -> PromptConfig:
 def get_leave_one_out_variants() -> list[str]:
     """Return leave-one-out preset: full refs + full-minus-one variants."""
     refs = [name for name in ("full", "full_shots") if name in VARIANTS]
-    loo = [name for name in VARIANTS if name.startswith("no_")]
+    loo = [name for name in VARIANTS if name.startswith("no_") and name != "no_search"]
     return refs + loo

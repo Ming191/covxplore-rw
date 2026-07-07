@@ -236,7 +236,9 @@ def generate(config: GenerationConfig) -> GenerationResult:
                 suite=suite,
                 remaining_iterations=config.max_iterations,
                 static_conditions_text=static_prompt_data.conditions_text,
-                static_context_text=static_prompt_data.context_text,
+                static_context_text=(
+                    static_prompt_data.context_text if prompt_config.preload_context else None
+                ),
                 static_source_text=static_prompt_data.source_text,
             ),
         }

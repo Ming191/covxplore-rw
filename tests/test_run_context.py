@@ -425,6 +425,38 @@ class TestExecuteTestcaseBatchTool:
         assert "--- bad2 | FAILED ---" in output
         assert "stderr for bad2" in output
 
+    def test_batch_classifies_linker_missing_out_as_compile_error(self):
+        class Executor:
+            def execute(self, absolute_path: str, test_body: str, test_name: str | None = None):
+                raise AkaUTError("ld.exe: cannot find ./test.cpp.out: No such file or directory")
+
+        ctx = RunContext()
+        suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+
+        output = ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())._run(
+            [{"test_body": "bad();", "test_name": "bad"}]
+        )
+
+        assert suite.tests[0].status == TestStatus.COMPILE_ERROR.value
+        assert "--- bad | COMPILE_ERROR ---" in output
+        assert "cannot find ./test.cpp.out" in output
+
+    def test_batch_reports_unknown_logs(self):
+        class Executor:
+            def execute(self, absolute_path: str, test_body: str, test_name: str | None = None):
+                raise AkaUTError("backend exploded before returning status")
+
+        ctx = RunContext()
+        suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+
+        output = ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())._run(
+            [{"test_body": "maybe();", "test_name": "mystery"}]
+        )
+
+        assert suite.tests[0].status == TestStatus.UNKNOWN.value
+        assert "--- mystery | UNKNOWN ---" in output
+        assert "backend exploded before returning status" in output
+
     def test_batch_fail_streak_counts_batches_not_candidates(self, monkeypatch):
         class Executor:
             def execute(self, absolute_path: str, test_body: str, test_name: str | None = None):

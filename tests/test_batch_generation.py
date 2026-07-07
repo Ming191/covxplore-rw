@@ -26,6 +26,7 @@ def _result(name: str, status: str, keys: list[tuple[int, bool]], body: str | No
 
 def test_merge_recomputes_gain_and_rejects_redundant_overlap():
     suite = TestSuite(function_path="/f.cpp::f()")
+    suite.coverage.total_mcdc_pairs = 2
     first = _result("first", "PASSED", [(1, True)], "x();")
     second = _result("second", "PASSED", [(1, True)], "y();")
 
@@ -39,6 +40,7 @@ def test_merge_recomputes_gain_and_rejects_redundant_overlap():
 
 def test_summary_records_rejected_redundant_streak_per_batch():
     suite = TestSuite(function_path="/f.cpp::f()")
+    suite.coverage.total_mcdc_pairs = 2
     suite.coverage.consecutive_redundant = 2
     summary = merge_batch_results(
         suite,
@@ -58,6 +60,7 @@ def test_summary_records_rejected_redundant_streak_per_batch():
 
 def test_summary_keeps_progress_reset_when_batch_has_progress():
     suite = TestSuite(function_path="/f.cpp::f()")
+    suite.coverage.total_mcdc_pairs = 2
     suite.coverage.consecutive_redundant = 2
     progress = _result("progress", "PASSED", [(1, True)], "x();")
     dupe = _result("dupe", "PASSED", [(1, True)], "y();")
@@ -72,6 +75,7 @@ def test_summary_keeps_progress_reset_when_batch_has_progress():
 
 def test_summary_does_not_count_failed_batch_as_redundant_streak():
     suite = TestSuite(function_path="/f.cpp::f()")
+    suite.coverage.total_mcdc_pairs = 2
     suite.coverage.consecutive_redundant = 2
     failed = _result("failed", "FAILED", [], "bad();")
     dupe = _result("dupe", "PASSED", [], "dupe();")
@@ -84,15 +88,19 @@ def test_summary_does_not_count_failed_batch_as_redundant_streak():
     assert suite.coverage.consecutive_redundant == 2
 
 
-def test_merge_accepts_non_passing_results_for_visibility():
+def test_merge_accepts_no_mcdc_passing_result_for_statement_coverage():
     suite = TestSuite(function_path="/f.cpp::f()")
-    failure = _result("compile", "COMPILE_ERROR", [], "bad();")
+    passed = _result("stmt", "PASSED", [], "x();")
+    passed.statement_coverage.visited = 1
+    passed.statement_coverage.total = 1
+    passed.statement_coverage.progress = 1.0
 
-    summary = merge_batch_results(suite, [failure])
+    summary = merge_batch_results(suite, [passed], min_suite_size=0)
 
-    assert summary.accepted == [failure]
+    assert summary.accepted == [passed]
     assert summary.rejected_redundant == []
-    assert suite.tests == [failure]
+    assert suite.tests == [passed]
+    assert suite.coverage.metrics(suite.tests).statement_pct == 1.0
 
 
 def test_merge_orders_by_marginal_gain_before_body_length():
