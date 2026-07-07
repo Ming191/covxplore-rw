@@ -21,7 +21,7 @@ class CoverageState:
         cs = CoverageState()
         cs.add_result(result, prior_results=tests, min_suite_size=3)
         m = cs.metrics(tests)           # -> CoverageMetrics
-        gi = cs.gap_input(tests, iter)  # -> CoverageGapInput
+        gi = cs.gap_input(tests, batch_count)  # -> CoverageGapInput
         cs.seed_conditions(...)
 
     Internal fields (prefixed ``_``) are for :meth:`add_result` and DTO
@@ -117,7 +117,7 @@ class CoverageState:
         )
 
     def gap_input(
-        self, tests: list[TestResult], iteration_count: int
+        self, tests: list[TestResult], batch_count: int
     ) -> CoverageGapInput:
         """Produce the DTO consumed by :class:`GapAnalyzer`."""
         obligations = [
@@ -140,7 +140,7 @@ class CoverageState:
             all_conditions_count=len(self._all_conditions),
             unique_condition_ids=len(self._condition_id_to_text),
             consecutive_redundant=self.consecutive_redundant,
-            iteration_count=iteration_count,
+            batch_count=batch_count,
         )
 
     def _mcdc_pct(self) -> float:

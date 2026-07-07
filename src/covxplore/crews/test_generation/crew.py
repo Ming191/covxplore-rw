@@ -18,35 +18,29 @@ from covxplore.tools import (
 from covxplore.tools.execute_testcase import RunContext
 
 
-def _guard(ctx: RunContext, max_iterations: int, max_forces: int = 3):
+def _guard(ctx: RunContext, start_batch: int, max_forces: int = 3):
     forced = 0
 
     def check(output):
         nonlocal forced
         suite = ctx.active_suite()
-        if suite is not None and suite.iteration_count >= max_iterations:
+        if suite is not None and suite.batch_count > start_batch:
             return True, output
         if forced >= max_forces:
             return True, output
 
         forced += 1
         return False, (
-            "Final answer emitted before a hard stop. "
-            "Do not finish yet; call execute_testcase_batch."
+            "Final answer emitted before executing this session's batch. "
+            "Do not finish yet; call execute_testcase_batch exactly once."
         )
 
     return check
 
 
 @CrewBase
-class CovxploreCrew:
-    """Single-agent crew for MC/DC coverage-driven test generation.
-
-    Parameters passed at construction time (not from YAML):
-      tools          — the 4 AkaUT REST-API tools
-      llm            — LLM instance or model string; defaults to Settings values
-      max_iterations — run-level iteration cap for the agent loop
-    """
+class TestGenerationCrew:
+    """One-session crew for MC/DC coverage-driven test generation."""
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
@@ -58,19 +52,17 @@ class CovxploreCrew:
         self,
         tools: list[BaseTool],
         llm: LLM | str | None = None,
-        max_iterations: int | None = None,
+        agent_max_iter: int = 3,
+        start_batch: int = 0,
         run_context: RunContext | None = None,
     ):
         self._tools = tools
         self._run_context = run_context
+        self._start_batch = start_batch
 
-        cfg = get_settings()
-        resolved_max_iterations = (
-            max_iterations if max_iterations is not None else cfg.max_iterations
-        )
-        if resolved_max_iterations <= 0:
-            raise ValueError("max_iterations must be > 0")
-        self._max_iterations = resolved_max_iterations
+        if agent_max_iter <= 0:
+            raise ValueError("agent_max_iter must be > 0")
+        self._agent_max_iter = agent_max_iter
 
         if isinstance(llm, LLM):
             self._llm = llm
@@ -83,13 +75,13 @@ class CovxploreCrew:
             config=self.agents_config["test_generator"],  # type: ignore[index]
             tools=self._tools,
             llm=self._llm,
-            max_iter=self._max_iterations,
+            max_iter=self._agent_max_iter,
         )
 
     @task
     def generate_tests(self) -> Task:
         guardrail = (
-            _guard(self._run_context, self._max_iterations)
+            _guard(self._run_context, self._start_batch)
             if self._run_context is not None
             else None
         )
@@ -114,9 +106,10 @@ class CovxploreCrew:
 def build_crew(
     prompt_config,  # PromptConfig
     *,
-    max_iterations: int | None = None,
+    agent_max_iter: int = 3,
+    start_batch: int = 0,
     run_context: RunContext,
-) -> tuple["CovxploreCrew", PromptBuilder]:
+) -> tuple["TestGenerationCrew", PromptBuilder]:
     builder = PromptBuilder(prompt_config)
 
     batch_tool = (
@@ -128,9 +121,10 @@ def build_crew(
     if prompt_config.search_tools:
         tools.extend([GetNodeSourceTool(), SearchNodesTool()])
 
-    crew_inst = CovxploreCrew(
+    crew_inst = TestGenerationCrew(
         tools=tools,
-        max_iterations=max_iterations,
+        agent_max_iter=agent_max_iter,
+        start_batch=start_batch,
         run_context=run_context,
     )
     return crew_inst, builder

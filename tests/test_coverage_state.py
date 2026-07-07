@@ -101,7 +101,7 @@ def test_coverage_state_metrics_and_gap_input_are_explicit_dtos() -> None:
     state.add_result(first, prior_results=[])
 
     metrics = state.metrics([first])
-    gap_input = state.gap_input([first], iteration_count=1)
+    gap_input = state.gap_input([first], batch_count=1)
 
     assert isinstance(metrics, CoverageMetrics)
     assert metrics.mcdc_pct == 0.5
@@ -110,7 +110,7 @@ def test_coverage_state_metrics_and_gap_input_are_explicit_dtos() -> None:
     assert isinstance(gap_input, CoverageGapInput)
     assert gap_input.tests == [first]
     assert gap_input.metrics == metrics
-    assert gap_input.iteration_count == 1
+    assert gap_input.batch_count == 1
 
 
 def test_gap_analyzer_accepts_gap_input_not_suite_object() -> None:
@@ -118,7 +118,7 @@ def test_gap_analyzer_accepts_gap_input_not_suite_object() -> None:
     suite.coverage.total_mcdc_pairs = 2
     suite.add_result(_result("t1"))
 
-    direct = GapAnalyzer().analyze(suite.coverage.gap_input(suite.tests, suite.iteration_count))
+    direct = GapAnalyzer().analyze(suite.coverage.gap_input(suite.tests, suite.batch_count))
 
     assert "The following MC/DC condition polarities are NOT yet covered" in direct.text
     assert "suite" not in str(inspect.signature(GapAnalyzer.analyze))

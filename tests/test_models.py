@@ -210,7 +210,8 @@ class TestSuiteAddResult:
         suite.add_result(r)
 
         assert len(suite.tests) == 1
-        assert suite.iteration_count == 1
+        assert suite.batch_count == 0
+        assert r.accepted_order == 1
         assert ConditionKey(1, True) in suite.coverage._covered_keys
 
     def test_new_keys_accumulate(self):
@@ -308,13 +309,20 @@ class TestSuiteAddResult:
         suite.add_result(r)
         assert suite.coverage._condition_id_to_text[42] == "a > b"
 
-    def test_iteration_counter(self):
+    def test_accepted_order_counter(self):
         suite = TestSuite(function_path="/f.cpp::foo()")
         for i in range(5):
             suite.add_result(self._make_result(f"t{i}"))
-        assert suite.iteration_count == 5
-        # last test should have iteration = 5
-        assert suite.tests[-1].iteration == 5
+        assert suite.batch_count == 0
+        assert suite.tests[-1].accepted_order == 5
+
+    def test_batch_counter(self):
+        suite = TestSuite(function_path="/f.cpp::foo()")
+        suite.record_batch(False)
+        suite.record_batch(True)
+        suite.record_batch(True)
+        assert suite.batch_count == 3
+        assert suite.consecutive_failures() == 2
 
     def test_consecutive_redundant_counter(self):
         suite = TestSuite(function_path="/f.cpp::foo()")

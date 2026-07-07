@@ -35,11 +35,14 @@ def flat_row(result: GenerationResult) -> dict:
         "total_tokens": result.total_input_tokens + result.total_output_tokens,
         "tracing_url": result.tracing_url or "",
         "elapsed_sec": result.elapsed_sec,
-        "iterations_used": result.iterations_used,
-        "num_tests": len(suite.tests),
-        "num_passing": sum(
+        "batches_used": result.batches_used,
+        "accepted_test_count": result.accepted_test_count,
+        "passing_test_count": sum(
             1 for t in suite.tests if t.status == TestStatus.PASSED.value
         ),
-        "num_redundant": sum(1 for t in suite.tests if t.is_redundant),
+        "rejected_candidate_count": result.rejected_candidate_count,
+        "candidate_count": result.candidate_count,
+        "tokens_per_batch": round((result.total_input_tokens + result.total_output_tokens) / max(result.batches_used, 1), 2),
+        "tokens_per_candidate": round((result.total_input_tokens + result.total_output_tokens) / max(result.candidate_count, 1), 2),
         "error": result.error_message or "",
     }

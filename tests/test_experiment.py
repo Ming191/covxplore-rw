@@ -53,7 +53,7 @@ class TestFlatRow:
         config = GenerationConfig(
             function_path="/a/b.cpp::foo(int)",
             prompt_variant="full",
-            max_iterations=10,
+            max_batches=10,
             mcdc_target=1.0,
         )
         suite = TestSuite(function_path=config.function_path)
@@ -67,43 +67,46 @@ class TestFlatRow:
         assert row["function_path"] == "/a/b.cpp::foo(int)"
         assert row["prompt_variant"] == "full"
         assert row["stop_reason"] == "agent_done"
-        assert row["num_tests"] == 0
-        assert row["num_passing"] == 0
-        assert row["num_redundant"] == 0
-        assert row["iterations_used"] == 0
+        assert row["accepted_test_count"] == 0
+        assert row["passing_test_count"] == 0
+        assert row["rejected_candidate_count"] == 0
+        assert row["candidate_count"] == 0
+        assert row["batches_used"] == 0
         assert row["error"] == ""
         assert row["total_tokens"] == 0
 
     def test_with_passing_and_failing_tests(self):
-        """flat_row counts passing and redundant correctly."""
+        """flat_row counts passing and candidates correctly."""
         config = GenerationConfig(
             function_path="/x/y.cpp::bar()",
             prompt_variant="baseline",
-            max_iterations=5,
+            max_batches=5,
             mcdc_target=1.0,
         )
         suite = TestSuite(function_path=config.function_path)
-        # Manually append tests to avoid add_result side-effects on is_redundant
         t1 = _make_result("t1", status="PASSED", is_redundant=False)
-        t1.iteration = 1
+        t1.accepted_order = 1
         t2 = _make_result("t2", status="PASSED", is_redundant=True)
-        t2.iteration = 2
+        t2.accepted_order = 2
         t3 = _make_result("t3", status="FAILED", is_redundant=False)
-        t3.iteration = 3
+        t3.accepted_order = 3
         t4 = _make_result("t4", status="RUNTIME_ERROR", is_redundant=False)
-        t4.iteration = 4
+        t4.accepted_order = 4
         suite.tests = [t1, t2, t3, t4]
-        suite.iteration_count = 4
+        suite.rejected_tests = [_make_result("reject")]
+        suite.batch_count = 2
 
         result = GenerationResult(
-            config=config, suite=suite, stop_reason="max_iter",
+            config=config, suite=suite, stop_reason="max_batches",
         )
         row = flat_row(result)
 
-        assert row["num_tests"] == 4
-        assert row["num_passing"] == 2  # t1, t2 are PASSED
-        assert row["num_redundant"] == 1  # only t2
-        assert row["stop_reason"] == "max_iter"
+        assert row["accepted_test_count"] == 4
+        assert row["passing_test_count"] == 2  # t1, t2 are PASSED
+        assert row["rejected_candidate_count"] == 1
+        assert row["candidate_count"] == 5
+        assert row["batches_used"] == 2
+        assert row["stop_reason"] == "max_batches"
 
     def test_error_message_propagated(self):
         config = GenerationConfig(
@@ -138,7 +141,7 @@ class TestFlatRow:
         config = GenerationConfig(
             function_path="/p/q.cpp::myFunc(int)",
             prompt_variant="full",
-            max_iterations=3,
+            max_batches=3,
             mcdc_target=0.8,
         )
         assert config.run_id is not None
@@ -166,11 +169,11 @@ class TestFlatRow:
         assert row["total_branches"] == 4
 
     @pytest.mark.parametrize("stop_reason", [
-        "max_iter",
+        "max_batches",
         "coverage_target",
         "redundant_streak",
         "agent_done",
-        "premature_agent_done",
+        "guardrail_incomplete",
         "error",
     ])
     def test_all_stop_reasons_in_row(self, stop_reason):

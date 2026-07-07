@@ -34,7 +34,7 @@ build-backend = "hatchling.build"
 packages = ["src/covxplore"]
 
 [tool.crewai]
-type = "crew"
+type = "flow"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

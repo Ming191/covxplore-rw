@@ -1,4 +1,4 @@
-from covxplore.crew import _guard
+from covxplore.crews.test_generation.crew import _guard
 from covxplore.types import TestResult, TestSuite
 from covxplore.tools.execute_testcase import RunContext
 
@@ -10,28 +10,27 @@ def _ctx(suite: TestSuite) -> RunContext:
     return ctx
 
 
-def test_guard_retries_first_final_answer_once():
+def test_guard_retries_final_answer_before_session_batch():
     suite = TestSuite(function_path="f")
 
-    ok, message = _guard(_ctx(suite), max_iterations=10)("done")
+    ok, message = _guard(_ctx(suite), start_batch=0)("done")
 
     assert ok is False
-    assert "call execute_testcase_batch" in message
+    assert "call execute_testcase_batch exactly once" in message
+
+
+def test_guard_accepts_final_answer_after_session_batch():
+    suite = TestSuite(function_path="f")
+    suite.record_batch(False)
+
+    assert _guard(_ctx(suite), start_batch=0)("done") == (True, "done")
 
 
 def test_guard_retries_three_final_answers_then_accepts():
     suite = TestSuite(function_path="f")
-    guard = _guard(_ctx(suite), max_iterations=10)
+    guard = _guard(_ctx(suite), start_batch=0)
 
     assert guard("done")[0] is False
     assert guard("done")[0] is False
     assert guard("done")[0] is False
     assert guard("done") == (True, "done")
-
-
-def test_guard_accepts_final_answer_at_max_iterations():
-    suite = TestSuite(function_path="f")
-    suite.iteration_count = 10
-    suite.tests.append(TestResult(test_name="t", test_body="", status="PASSED"))
-
-    assert _guard(_ctx(suite), max_iterations=10)("done") == (True, "done")

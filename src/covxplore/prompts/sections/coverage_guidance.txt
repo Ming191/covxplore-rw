@@ -1,4 +1,4 @@
-COVERAGE GUIDANCE (injected dynamically each iteration):
+COVERAGE GUIDANCE (injected dynamically each batch):
 
 {coverage_gap}
 
@@ -6,7 +6,7 @@ The suite coverage progress so far:
   Statement : {stmt_pct}%
   Branch    : {branch_pct}%
   MC/DC     : {mcdc_pct}% ({covered}/{total} pairs covered)
-Remaining budget: {remaining_iterations} iterations.
+Remaining budget: {remaining_batches} batches.
 
 Do not generate a test that repeats the same nodeId-polarity combination
 already present in a previously PASSED test — that would be a redundant test.

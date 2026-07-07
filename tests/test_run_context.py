@@ -380,6 +380,7 @@ class TestExecuteTestcaseBatchTool:
 
         ctx = RunContext()
         suite = ctx.reset_suite("/x.cpp::f()", "run-1")
+        suite.coverage.total_mcdc_pairs = 2
         executor = Executor()
 
         output = ExecuteTestcaseBatchTool(run_context=ctx, executor=executor)._run(

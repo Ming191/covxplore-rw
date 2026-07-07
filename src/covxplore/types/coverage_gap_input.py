@@ -21,4 +21,4 @@ class CoverageGapInput:
     all_conditions_count: int = 0
     unique_condition_ids: int = 0
     consecutive_redundant: int = 0
-    iteration_count: int = 0
+    batch_count: int = 0

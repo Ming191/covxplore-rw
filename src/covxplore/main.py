@@ -34,8 +34,8 @@ def run_generation() -> None:
         help="Directory to write the summary JSON. Defaults to current directory.",
     )
     parser.add_argument(
-        "--max-iter", type=int, default=None,
-        help="Override max iterations (default: Settings.max_iterations).",
+        "--max-batches", type=int, default=None,
+        help="Override max batches (default: Settings.max_batches).",
     )
     parser.add_argument(
         "--mcdc-target", type=float, default=None,
@@ -52,7 +52,7 @@ def run_generation() -> None:
     exp_cfg = GenerationConfig(
         function_path=args.path,
         prompt_variant=variant,
-        max_iterations=args.max_iter if args.max_iter is not None else cfg.max_iterations,
+        max_batches=args.max_batches if args.max_batches is not None else cfg.max_batches,
         mcdc_target=args.mcdc_target if args.mcdc_target is not None else cfg.mcdc_target,
     )
 

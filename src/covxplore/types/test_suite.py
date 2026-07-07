@@ -14,17 +14,18 @@ class TestSuite:
     tests: list[TestResult] = field(default_factory=list)
     rejected_tests: list[TestResult] = field(default_factory=list)
     coverage: CoverageState = field(default_factory=CoverageState)
-    iteration_count: int = 0
+    batch_count: int = 0
     fail_streak: int = 0
     started_at: float = field(default_factory=time.monotonic)
 
     def add_result(self, result: TestResult, min_suite_size: int = 3) -> None:
-        self.iteration_count += 1
-        result.iteration = self.iteration_count
-
+        result.accepted_order = len(self.tests) + 1
         self.coverage.add_result(result, prior_results=self.tests, min_suite_size=min_suite_size)
-
         self.tests.append(result)
+
+    def record_batch(self, failed: bool) -> None:
+        self.batch_count += 1
+        self.fail_streak = self.fail_streak + 1 if failed else 0
 
     @property
     def redundancy_rate(self) -> float:
@@ -49,18 +50,15 @@ class TestSuite:
     def non_redundant_tests(self) -> list[TestResult]:
         return [t for t in self.tests if not t.is_redundant]
 
-    def mark_iter(self, failed: bool) -> None:
-        self.fail_streak = self.fail_streak + 1 if failed else 0
-
     def consecutive_failures(self) -> int:
-        """Count consecutive failing tool iterations, not individual test cases."""
+        """Count consecutive failing batches, not individual test cases."""
         return self.fail_streak
 
     def to_dict(self) -> dict:
         metrics = self.coverage.metrics(self.tests)
         return {
             "function_path": self.function_path,
-            "iteration_count": self.iteration_count,
+            "batch_count": self.batch_count,
             "fail_streak": self.fail_streak,
             "statement_coverage_pct": round(metrics.statement_pct, 4),
             "branch_coverage_pct": round(metrics.branch_pct, 4),

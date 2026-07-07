@@ -1,8 +1,0 @@
-generate_tests:
-  description: >
-    {task_description}
-  expected_output: >
-    A series of execute_testcase_batch tool calls with no more than 3
-    test candidates per call, covering as many coverage targets as possible. When done, output exactly:
-    DONE: <n> tests generated, MC/DC=<pct>%
-  agent: test_generator

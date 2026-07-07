@@ -39,7 +39,7 @@ class McdcAnalyzer:
 
     @staticmethod
     def is_stuck(target: McdcTarget, ci: CoverageGapInput) -> bool:
-        if ci.iteration_count < 6:
+        if ci.batch_count < 6:
             return False
         target_key = ConditionKey(target.condition_id, target.required_value)
         opposite_key = ConditionKey(target.condition_id, not target.required_value)

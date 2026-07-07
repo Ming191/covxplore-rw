@@ -56,7 +56,7 @@ class AblationRunner:
                 exp_cfg = GenerationConfig(
                     function_path=function_path,
                     prompt_variant=variant,
-                    max_iterations=cfg.max_iterations,
+                    max_batches=cfg.max_batches,
                     mcdc_target=cfg.mcdc_target,
                 )
                 results.append(generate(exp_cfg))

@@ -38,7 +38,7 @@ covxplore-gen \
 - `--path`, `-p`: Absolute path of the function node (as returned by `/api/search`). *(Required)*
 - `--variant`, `-v`: Prompt variant name (default: value from `Settings.default_prompt_variant`).
 - `--out`, `-o`: Directory to write the summary JSON. Defaults to current directory.
-- `--max-iter`: Override max iterations setting.
+- `--max-batches`: Override max batch count setting.
 - `--mcdc-target`: Override MC/DC target 0.0–1.0 setting.
 
 ### `covxplore-ablate`

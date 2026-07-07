@@ -187,10 +187,13 @@ def _write_pipeline_summary_rows(
                 "total_tokens",
                 "tracing_url",
                 "elapsed_sec",
-                "iterations_used",
-                "num_tests",
-                "num_passing",
-                "num_redundant",
+                "batches_used",
+                "accepted_test_count",
+                "passing_test_count",
+                "rejected_candidate_count",
+                "candidate_count",
+                "tokens_per_batch",
+                "tokens_per_candidate",
                 "error",
             ]
         with open(csv_path, "w", newline="", encoding="utf-8") as f:

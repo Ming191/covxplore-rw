@@ -37,7 +37,7 @@ class TestResult(BaseModel):
     token_input: int = 0
     token_output: int = 0
     elapsed_ms: float = 0.0
-    iteration: int = 0
+    accepted_order: int = 0
 
     def condition_keys(self) -> set[ConditionKey]:
         """Return (condition, polarity) keys visited by this test."""
