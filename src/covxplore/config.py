@@ -20,16 +20,18 @@ class Settings(BaseSettings):
     # DeepSeek via LiteLLM (backward compatible DEEPSEEK_* settings)
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model: str = "deepseek/deepseek-v4-pro"
+    deepseek_model: str = "deepseek/deepseek-chat"
 
     # Kimchi OpenAI-compatible endpoint
     kimchi_api_key: str = ""
     kimchi_base_url: str = "https://llm.kimchi.dev/openai/v1"
     kimchi_model: str = "kimi-k2.6"
 
-    # Generation loop
+    # Legacy MAS-enhanced runner compatibility. COV127 entry points do not read
+    # these coverage/iteration controls.
     max_iterations: int = 15
-    max_tokens: int = 4000
+    # No Covxplore-imposed output cap by default. Provider/model limits still apply.
+    max_tokens: int | None = None
     llm_temperature: float = 0.4
 
     llm_empty_retries: int = 5  # extra attempts when a call returns empty
@@ -41,7 +43,17 @@ class Settings(BaseSettings):
     agent_retry_limit: int = 2  # retry entire agent loop if it returns 0 tests
     request_timeout_sec: int = 120  # per REST call
 
-    # Ablation
+    # COV127 neuro-symbolic generation
+    strategy: str = "hybrid"
+    statement_target: float = 1.0
+    branch_target: float = 1.0
+    scheduler_mode: str = "rule"
+    wall_time_minutes: float = 30.0
+    max_llm_calls: int = 15
+    max_symbolic_attempts: int = 30
+    max_test_executions: int = 30
+
+    # Legacy prompt registry plus COV127 experiment repetition default.
     default_prompt_variant: str = "full"
     ablation_repeat: int = 3  # runs per variant per function
 

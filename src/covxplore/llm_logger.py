@@ -177,11 +177,27 @@ class LLMInteractionLogger(CustomLogger):
             pass
 
         try:
-            u = response_obj.usage
+            u = (
+                response_obj.get("usage")
+                if isinstance(response_obj, dict)
+                else response_obj.usage
+            )
             usage = {
-                "prompt_tokens": getattr(u, "prompt_tokens", 0),
-                "completion_tokens": getattr(u, "completion_tokens", 0),
-                "total_tokens": getattr(u, "total_tokens", 0),
+                "prompt_tokens": (
+                    u.get("prompt_tokens", 0)
+                    if isinstance(u, dict)
+                    else getattr(u, "prompt_tokens", 0)
+                ),
+                "completion_tokens": (
+                    u.get("completion_tokens", 0)
+                    if isinstance(u, dict)
+                    else getattr(u, "completion_tokens", 0)
+                ),
+                "total_tokens": (
+                    u.get("total_tokens", 0)
+                    if isinstance(u, dict)
+                    else getattr(u, "total_tokens", 0)
+                ),
             }
         except Exception:
             pass
@@ -192,10 +208,11 @@ class LLMInteractionLogger(CustomLogger):
             elapsed_ms = None
 
         with self._lock:
-            self._interactions.append(
+            self._append_if_new(
                 {
                     "call_index": idx,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "source": "litellm",
                     "model": model,
                     "elapsed_ms": elapsed_ms,
                     "usage": usage,
@@ -214,10 +231,11 @@ class LLMInteractionLogger(CustomLogger):
         with self._lock:
             self._call_index += 1
             idx = self._call_index
-            self._interactions.append(
+            self._append_if_new(
                 {
                     "call_index": idx,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "source": "crewai_provider",
                     "model": getattr(provider, "model", "unknown"),
                     "elapsed_ms": None,
                     "usage": {
@@ -231,6 +249,18 @@ class LLMInteractionLogger(CustomLogger):
                     "tool_calls": None,
                 }
             )
+
+    def _append_if_new(self, interaction: dict) -> None:
+        """Drop only the cross-callback duplicate for one provider completion."""
+        for existing in reversed(self._interactions):
+            if existing.get("source") == interaction.get("source"):
+                continue
+            if (
+                existing.get("model") == interaction.get("model")
+                and existing.get("usage") == interaction.get("usage")
+            ):
+                return
+        self._interactions.append(interaction)
 
     @property
     def interactions(self) -> list[dict]:

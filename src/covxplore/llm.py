@@ -102,18 +102,31 @@ class LLMProvider(ABC):
     def resolve(self, cfg: Any, model: str | None = None) -> LLMConfig:
         """Return provider-specific LLM construction values."""
 
-    def build(self, cfg: Any, model: str | None = None) -> RetryingLLM:
+    def build(
+        self,
+        cfg: Any,
+        model: str | None = None,
+        *,
+        empty_retries: int | None = None,
+    ) -> RetryingLLM:
         llm_cfg = self.resolve(cfg, model)
-        return cast(RetryingLLM, RetryingLLM(
-            model=llm_cfg.model,
-            api_key=llm_cfg.api_key,
-            base_url=llm_cfg.base_url,
-            max_tokens=cfg.max_tokens,
-            temperature=cfg.llm_temperature,
-            provider_name=llm_cfg.provider_name,
-            empty_retries=cfg.llm_empty_retries,
-            retry_backoff_sec=cfg.llm_retry_backoff_sec,
-        ))
+        kwargs: dict[str, Any] = {
+            "model": llm_cfg.model,
+            "api_key": llm_cfg.api_key,
+            "base_url": llm_cfg.base_url,
+            "temperature": cfg.llm_temperature,
+            # HybridGenerationRunner owns retries so every provider request is
+            # observable and charged against the hard LLM-call budget.
+            "num_retries": 0,
+            "provider_name": llm_cfg.provider_name,
+            "empty_retries": (
+                cfg.llm_empty_retries if empty_retries is None else empty_retries
+            ),
+            "retry_backoff_sec": cfg.llm_retry_backoff_sec,
+        }
+        if cfg.max_tokens is not None:
+            kwargs["max_tokens"] = cfg.max_tokens
+        return cast(RetryingLLM, RetryingLLM(**kwargs))
 
 
 class DeepSeekProvider(LLMProvider):
@@ -160,6 +173,14 @@ def get_llm_provider(name: str | None) -> LLMProvider:
         raise ValueError(f"Unsupported LLM provider '{name}'. Available providers: {available}") from exc
 
 
-def build_llm(model: str | None = None) -> RetryingLLM:
+def build_llm(
+    model: str | None = None,
+    *,
+    empty_retries: int | None = None,
+) -> RetryingLLM:
     cfg = get_settings()
-    return get_llm_provider(cfg.llm_provider).build(cfg, model)
+    return get_llm_provider(cfg.llm_provider).build(
+        cfg,
+        model,
+        empty_retries=empty_retries,
+    )

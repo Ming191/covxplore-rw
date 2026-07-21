@@ -6,6 +6,14 @@ from typing import Any
 import httpx
 
 from covxplore.config import get_settings
+from covxplore.hybrid.models import (
+    CoverageModel,
+    ExecuteIntentRequest,
+    ExecutionResult,
+    SymbolicAttemptRequest,
+    SymbolicAttemptResponse,
+    TestIntent,
+)
 from covxplore.status import normalize_test_status
 
 
@@ -128,7 +136,7 @@ class AkaUTClient:
             raise AkaUTError(f"GET {url} failed: {exc}") from exc
         if not r.is_success:
             body = r.text[:300]
-            raise AkaUTError(f"GET {url} → HTTP {r.status_code}: {body}", r.status_code)
+            raise AkaUTError(f"GET {url} -> HTTP {r.status_code}: {body}", r.status_code)
         return r.json()
 
     def _post(self, path: str, body: dict) -> Any:
@@ -140,7 +148,7 @@ class AkaUTClient:
         if not r.is_success:
             body_text = r.text[:300]
             raise AkaUTError(
-                f"POST {url} → HTTP {r.status_code}: {body_text}", r.status_code
+                f"POST {url} -> HTTP {r.status_code}: {body_text}", r.status_code
             )
         return r.json()
 
@@ -220,3 +228,23 @@ class AkaUTClient:
         if isinstance(data, dict) and "error" in data:
             raise AkaUTError(data["error"])
         return ExecuteResult(raw=data)
+
+    def get_coverage_model(self, absolute_path: str) -> CoverageModel:
+        data = self._get(
+            "/api/v2/functions/coverage-model",
+            {"absolutePath": absolute_path.replace("\\", "/")},
+        )
+        return CoverageModel.model_validate(data)
+
+    def create_symbolic_attempt(
+        self, request: SymbolicAttemptRequest
+    ) -> SymbolicAttemptResponse:
+        data = self._post("/api/v2/symbolic/attempts", request.wire_dict())
+        return SymbolicAttemptResponse.model_validate(data)
+
+    def execute_intent(
+        self, intent: TestIntent, test_name: str | None = None
+    ) -> ExecutionResult:
+        request = ExecuteIntentRequest(intent=intent, test_name=test_name)
+        data = self._post("/api/v2/test-intents/execute", request.wire_dict())
+        return ExecutionResult.model_validate(data)

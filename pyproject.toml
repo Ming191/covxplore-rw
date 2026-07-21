@@ -1,7 +1,7 @@
 [project]
 name = "covxplore"
 version = "0.2.0"
-description = "MC/DC coverage-driven test generation agent for C/C++ (ablation study framework)"
+description = "Statement/branch-targeted neuro-symbolic unit-test generation for C/C++"
 authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.10,<3.14"
 dependencies = [
@@ -20,7 +20,9 @@ dependencies = [
 [project.scripts]
 covxplore-gen      = "covxplore.main:run_generation"
 covxplore-ablate   = "covxplore.main:run_ablation"
+covxplore-batch    = "covxplore.main:run_batch"
 covxplore-pipeline = "covxplore.main:run_parallel"
+covxplore-policy   = "covxplore.main:run_policy"
 
 [build-system]
 requires = ["hatchling"]

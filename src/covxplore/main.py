@@ -1,169 +1,229 @@
 from __future__ import annotations
 
 import argparse
-import json
 import warnings
 from pathlib import Path
 
-warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
-
 from dotenv import load_dotenv
 
+warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# run_generation  (covxplore-gen)
-# ---------------------------------------------------------------------------
+
+def _add_generation_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--strategy", choices=("llm", "symbolic", "hybrid"), default=None
+    )
+    parser.add_argument("--statement-target", type=float, default=None)
+    parser.add_argument("--branch-target", type=float, default=None)
+    parser.add_argument(
+        "--scheduler", choices=("rule", "collect", "frozen"), default=None
+    )
+    parser.add_argument("--policy", type=Path, default=None)
+    parser.add_argument("--wall-time-minutes", type=float, default=None)
+    parser.add_argument("--max-llm-calls", type=int, default=None)
+    parser.add_argument("--max-symbolic-attempts", type=int, default=None)
+    parser.add_argument("--max-test-executions", type=int, default=None)
+
+
+def _generation_config(args: argparse.Namespace, function_path: str):
+    from covxplore.config import get_settings
+    from covxplore.hybrid.runner import HybridGenerationConfig
+
+    settings = get_settings()
+    return HybridGenerationConfig(
+        function_path=function_path,
+        strategy=args.strategy or settings.strategy,
+        statement_target=(
+            args.statement_target
+            if args.statement_target is not None
+            else settings.statement_target
+        ),
+        branch_target=(
+            args.branch_target
+            if args.branch_target is not None
+            else settings.branch_target
+        ),
+        scheduler_mode=args.scheduler or settings.scheduler_mode,
+        policy_path=args.policy,
+        wall_time_minutes=(
+            args.wall_time_minutes
+            if args.wall_time_minutes is not None
+            else settings.wall_time_minutes
+        ),
+        max_llm_calls=(
+            args.max_llm_calls
+            if args.max_llm_calls is not None
+            else settings.max_llm_calls
+        ),
+        max_symbolic_attempts=(
+            args.max_symbolic_attempts
+            if args.max_symbolic_attempts is not None
+            else settings.max_symbolic_attempts
+        ),
+        max_test_executions=(
+            args.max_test_executions
+            if args.max_test_executions is not None
+            else settings.max_test_executions
+        ),
+    )
+
 
 def run_generation() -> None:
-    """Single generation run — one function, one prompt variant."""
+    """Run COV127 generation for one C/C++ focal method."""
     parser = argparse.ArgumentParser(
         prog="covxplore-gen",
-        description="Generate MC/DC-covering tests for one C/C++ function.",
+        description="Generate statement/branch-targeted tests for one C/C++ function.",
     )
     parser.add_argument(
         "--path", "-p", required=True,
-        help="Absolute path of the function node (as returned by /api/search).",
+        help="Absolute function path returned by AkaUT /api/search.",
     )
     parser.add_argument(
-        "--variant", "-v", default=None,
-        help="Prompt variant name (default: value from Settings.default_prompt_variant).",
+        "--out", "-o", default="results",
+        help="Directory for JSON, per-run CSV, and cumulative summary.csv.",
     )
-    parser.add_argument(
-        "--out", "-o", default=None,
-        help="Directory to write the summary JSON. Defaults to current directory.",
-    )
-    parser.add_argument(
-        "--max-iter", type=int, default=None,
-        help="Override max iterations (default: Settings.max_iterations).",
-    )
-    parser.add_argument(
-        "--mcdc-target", type=float, default=None,
-        help="Override MC/DC target 0.0–1.0 (default: Settings.mcdc_target).",
-    )
+    _add_generation_arguments(parser)
     args = parser.parse_args()
 
-    from covxplore.config import get_settings
-    from covxplore.generator import GenerationConfig, generate
+    from covxplore.api_client import AkaUTClient
+    from covxplore.hybrid.artifacts import write_artifacts
+    from covxplore.hybrid.runner import HybridGenerationRunner
 
-    cfg = get_settings()
-    variant = args.variant or cfg.default_prompt_variant
+    config = _generation_config(args, args.path)
+    with AkaUTClient() as client:
+        result = HybridGenerationRunner(client=client).run(config)
 
-    exp_cfg = GenerationConfig(
-        function_path=args.path,
-        prompt_variant=variant,
-        max_iterations=args.max_iter if args.max_iter is not None else cfg.max_iterations,
-        mcdc_target=args.mcdc_target if args.mcdc_target is not None else cfg.mcdc_target,
+    json_path, csv_path, summary_path = write_artifacts(result, Path(args.out))
+    metrics = result.to_summary_dict()["metrics"]
+    print(
+        "\n"
+        f"Statement: {metrics['statement_cov'] * 100:.2f}% "
+        f"({metrics['covered_statement']}/{metrics['total_statement']}) | "
+        f"Branch: {metrics['branch_cov'] * 100:.2f}% "
+        f"({metrics['covered_branch']}/{metrics['total_branch']}) | "
+        f"stop: {result.stop_reason}"
     )
+    print(
+        f"Tokens: {metrics['total_tokens']} | "
+        f"time: {metrics['elapsed_sec']:.2f}s"
+    )
+    print(f"JSON: {json_path}")
+    print(f"CSV: {csv_path}")
+    print(f"Cumulative CSV: {summary_path}")
 
-    result = generate(exp_cfg)
-
-    summary = result.to_summary_dict()
-    out_dir = Path(args.out) if args.out else Path(".")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"gen_{exp_cfg.run_id}.json"
-    out_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\nSummary written to: {out_path}")
-
-
-# ---------------------------------------------------------------------------
-# run_ablation  (covxplore-ablate)
-# ---------------------------------------------------------------------------
 
 def run_ablation() -> None:
-    """Full ablation matrix run."""
+    """Run COV127 baselines and ablations for one C++ focal method."""
     parser = argparse.ArgumentParser(
         prog="covxplore-ablate",
-        description="Run the ablation study across prompt variants.",
+        description="Run COV127 strategy baselines and component ablations.",
     )
     parser.add_argument("--path", "-p", required=True)
     parser.add_argument(
         "--variants", nargs="+", default=None,
-        help="Variant names to include. Defaults to all variants.",
-    )
-    parser.add_argument(
-        "--leave-one-out", "--loo",
-        action="store_true",
-        help="Run leave-one-out preset: full, full_shots, and all variants starting with 'no_'.",
+        help="Experiment names; defaults to variants that do not require a policy.",
     )
     parser.add_argument("--repeat", "-r", type=int, default=None)
     parser.add_argument("--out", "-o", default="results")
+    _add_generation_arguments(parser)
     args = parser.parse_args()
 
-    from covxplore.ablation import AblationRunner
-    from covxplore.prompts.registry import get_leave_one_out_variants
-
-    if args.leave_one_out and args.variants:
-        parser.error("Use either --variants or --leave-one-out, not both.")
-
-    variants = get_leave_one_out_variants() if args.leave_one_out else args.variants
-
-    runner = AblationRunner()
-    results = runner.run_matrix(
-        function_path=args.path,
-        variants=variants,
-        repeat=args.repeat,
+    from covxplore.api_client import AkaUTClient
+    from covxplore.config import get_settings
+    from covxplore.hybrid.experiments import (
+        EXPERIMENT_VARIANTS,
+        HybridExperimentRunner,
     )
-    runner.export_results(results, Path(args.out))
+
+    variants = args.variants or [
+        name for name in EXPERIMENT_VARIANTS if name != "hybrid_frozen"
+    ]
+    if "hybrid_frozen" in variants and args.policy is None:
+        parser.error("hybrid_frozen requires --policy")
+    repeat = args.repeat or get_settings().ablation_repeat
+    with AkaUTClient() as client:
+        summary = HybridExperimentRunner(client).run_matrix(
+            _generation_config(args, args.path),
+            variants=variants,
+            repeat=repeat,
+            out_dir=Path(args.out),
+        )
+    print(f"Experiment summary: {summary}")
 
 
-# ---------------------------------------------------------------------------
-# run_parallel  (covxplore-pipeline)
-# ---------------------------------------------------------------------------
+def run_batch() -> None:
+    """Run COV127 sequentially for selected C++ focal methods."""
+    parser = argparse.ArgumentParser(
+        prog="covxplore-batch",
+        description=(
+            "Generate tests sequentially because AkaUT owns process-global execution state."
+        ),
+    )
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--paths-file", "-f", type=Path,
+        help="UTF-8 file containing one AkaUT absolute function path per line.",
+    )
+    source.add_argument(
+        "--source-files", nargs="+",
+        help="C/C++ source names or paths used to filter AkaUT search results.",
+    )
+    parser.add_argument("--out", "-o", default="results")
+    parser.add_argument(
+        "--no-resume", action="store_true",
+        help="Do not skip completed function/strategy/scheduler identities.",
+    )
+    _add_generation_arguments(parser)
+    args = parser.parse_args()
+
+    from covxplore.api_client import AkaUTClient
+    from covxplore.hybrid.batch import BatchConfig, HybridBatchRunner
+
+    function_paths = (
+        HybridBatchRunner.load_paths(args.paths_file) if args.paths_file else []
+    )
+    with AkaUTClient() as client:
+        summary = HybridBatchRunner(client).run(
+            BatchConfig(
+                generation=_generation_config(args, "__batch__"),
+                out_dir=Path(args.out),
+                function_paths=function_paths,
+                source_files=args.source_files or [],
+                resume=not args.no_resume,
+            )
+        )
+    print(f"Batch summary: {summary}")
 
 
 def run_parallel() -> None:
-    """Parallel pipeline — run ablation for every function in a paths file."""
-    parser = argparse.ArgumentParser(
-        prog="covxplore-pipeline",
-        description=(
-            "Run MC/DC ablation for every function listed in a paths file, "
-            "in parallel. Results land in per-function subdirectories under --out, "
-            "and a combined pipeline_summary.csv is written to --out."
-        ),
-    )
-    parser.add_argument(
-        "--paths-file", "-f", required=True,
-        help="Text file listing function paths (one per line; lines starting with # are ignored).",
-    )
-    parser.add_argument(
-        "--workers", "-w", type=int, default=3,
-        help="Maximum number of functions to process concurrently (default: 3).",
-    )
-    parser.add_argument(
-        "--variants", nargs="+", default=None,
-        help="Prompt variant names to run. Defaults to all variants.",
-    )
-    parser.add_argument(
-        "--leave-one-out", "--loo",
-        action="store_true",
-        help="Run leave-one-out preset: full, full_shots, and all variants starting with 'no_'.",
-    )
-    parser.add_argument(
-        "--repeat", "-r", type=int, default=None,
-        help="Repetitions per variant. Defaults to Settings.ablation_repeat.",
-    )
-    parser.add_argument(
-        "--out", "-o", default="results",
-        help="Root output directory. Each function gets a subdirectory (default: results).",
-    )
+    """Backward-compatible alias; COV127 execution is deliberately sequential."""
+    run_batch()
+
+
+def run_policy() -> None:
+    """Inspect or freeze a collected COV127 LinUCB policy."""
+    parser = argparse.ArgumentParser(prog="covxplore-policy")
+    commands = parser.add_subparsers(dest="command", required=True)
+    freeze = commands.add_parser("freeze", help="Write an immutable evaluation policy.")
+    freeze.add_argument("--input", type=Path, required=True)
+    freeze.add_argument("--out", type=Path, required=True)
+    inspect = commands.add_parser("inspect", help="Print policy metadata.")
+    inspect.add_argument("--policy", type=Path, required=True)
     args = parser.parse_args()
 
-    from covxplore.pipeline import ParallelPipeline
-    from covxplore.prompts.registry import get_leave_one_out_variants
+    from covxplore.hybrid.scheduler import LinUCBPolicy
 
-    if args.leave_one_out and args.variants:
-        parser.error("Use either --variants or --leave-one-out, not both.")
-
-    variants = get_leave_one_out_variants() if args.leave_one_out else args.variants
-
-    pipeline = ParallelPipeline(
-        paths_file=Path(args.paths_file),
-        out_dir=Path(args.out),
-        variants=variants,
-        repeat=args.repeat,
-        max_workers=args.workers,
+    if args.command == "freeze":
+        policy = LinUCBPolicy.load(args.input, frozen=True)
+        policy.freeze_to(args.out)
+        print(f"Frozen policy: {args.out}")
+        return
+    policy = LinUCBPolicy.load(args.policy)
+    print(
+        f"algorithm=LinUCB frozen={policy.frozen} alpha={policy.alpha} "
+        f"ridge={policy.ridge} observations="
+        + ",".join(
+            f"{route.value}:{policy.observations[route]}" for route in policy.observations
+        )
     )
-    summary_path = pipeline.run()
-    print(f"\nPipeline complete. Summary: {summary_path}")
-
