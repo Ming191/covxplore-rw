@@ -7,7 +7,7 @@ from crewai.tools import BaseTool
 
 from covxplore.config import get_settings
 from covxplore.llm import build_llm
-from covxplore.prompts import PromptBuilder
+from covxplore.prompts.builder import PromptBuilder
 from covxplore.tools import (
     ExecuteTestcaseBatchAnyTool,
     ExecuteTestcaseBatchTool,

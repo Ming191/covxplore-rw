@@ -1,14 +1,49 @@
 """Tests for covxplore.prompts — pure, no network, no secrets."""
 
+from pathlib import Path
+
 import pytest
 
 from covxplore.prompts.config import PromptConfig
 from covxplore.prompts.builder import PromptBuilder
+from covxplore.prompts.catalog import load_catalog
 from covxplore.prompts.registry import (
     VARIANTS,
     get_leave_one_out_variants,
     get_variant,
 )
+
+
+def test_prompt_catalog_contains_all_sections_and_templates():
+    catalog = load_catalog()
+
+    assert set(catalog["sections"]) == {
+        "role_persona",
+        "cot_reasoning",
+        "coverage_guidance",
+        "self_reflection",
+        "few_shot_examples",
+        "output_format",
+    }
+    assert set(catalog["workflows"]) == {"unlimited_batch", "no_search", "search"}
+    assert set(catalog["coverage"]) == {
+        "no_tests",
+        "compile_error",
+        "failed",
+        "unknown",
+        "success",
+        "detail_unavailable",
+        "detail_header",
+        "max_statement_lines",
+        "max_branch_lines",
+    }
+    assert set(catalog["task"]) == {"description", "context", "source"}
+
+
+def test_legacy_prompt_text_files_are_removed():
+    sections_dir = Path(__file__).parents[1] / "src" / "covxplore" / "prompts" / "sections"
+
+    assert not list(sections_dir.glob("*.txt"))
 
 
 class TestPromptConfigEnabledSections:

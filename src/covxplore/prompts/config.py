@@ -1,8 +1,7 @@
 """PromptConfig — a dataclass of boolean flags, one per ablation section.
 
-Each flag controls whether the corresponding prompt section (stored as a .txt
-file in prompts/sections/) is included when building the agent's system prompt
-and task description.
+Each flag controls whether the corresponding section from ``prompts.yaml`` is
+included when building the agent's system prompt and task description.
 
 Section mapping (from the literature):
   S1 role_persona      → AgentCoder persona + safety-standard framing (2312.13010)
