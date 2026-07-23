@@ -38,7 +38,6 @@ class Settings(BaseSettings):
     max_tokens: int = 4000
     llm_temperature: float = 0.4
 
-    mcdc_target: float = 1.0  # 1.0 = 100 % MC/DC coverage
     min_suite_size: int = 1  # keep at least this many tests even if redundant
     redundant_streak_limit: int = 3  # early-stop after N consecutive redundant tests
     fail_streak_limit: int = 3  # early-stop after N consecutive failing batches

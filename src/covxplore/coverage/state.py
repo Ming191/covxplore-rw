@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from covxplore.types.condition_key import ConditionKey
 from covxplore.types.unvisited_branch import UnvisitedBranch
 from covxplore.types.unvisited_statement import UnvisitedStatement
 from covxplore.types.test_result import TestResult
 from covxplore.types.coverage_gap_input import CoverageGapInput
 from covxplore.types.coverage_metrics import CoverageMetrics
-from covxplore.types.mcdc_obligation import McdcObligation
 from covxplore.status import TestStatus, normalize_test_status
 
 
@@ -22,7 +20,6 @@ class CoverageState:
         cs.add_result(result, prior_results=tests, min_suite_size=3)
         m = cs.metrics(tests)           # -> CoverageMetrics
         gi = cs.gap_input(tests, batch_count)  # -> CoverageGapInput
-        cs.seed_conditions(...)
 
     Internal fields (prefixed ``_``) are for :meth:`add_result` and DTO
     producers only; external callers should use :meth:`metrics`,
@@ -30,28 +27,16 @@ class CoverageState:
     """
 
     # --- internal accumulation (private) ---
-    _covered_keys: set[ConditionKey] = field(default_factory=set)
-    _condition_id_to_text: dict[int, str] = field(default_factory=dict)
-    _condition_id_to_line: dict[int, int | None] = field(default_factory=dict)
-    _all_conditions: list[str] = field(default_factory=list)
     _cumulative_uncovered_stmt_ids: set[int] | None = None
     _cumulative_uncovered_branch_keys: set[tuple[int, bool]] | None = None
     _stmt_node_info: dict[int, UnvisitedStatement] = field(default_factory=dict)
     _branch_node_info: dict[int, UnvisitedBranch] = field(default_factory=dict)
     _total_statements: int = 0
     _total_branches: int = 0
-
-    total_mcdc_pairs: int = 0
-    """Total MC/DC pairs to cover (0 means no MC/DC data).
-    Set via :meth:`seed_conditions` or discovered from test results."""
-
+    _best_statement_visited: int = 0
+    _best_branch_visited: int = 0
     consecutive_redundant: int = 0
     """Counter of back-to-back redundant tests; reset on progress."""
-
-    @property
-    def has_mcdc(self) -> bool:
-        """Whether the function under test has MC/DC conditions."""
-        return self.total_mcdc_pairs > 0
 
     def add_result(
         self,
@@ -65,40 +50,15 @@ class CoverageState:
         if normalized not in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}:
             return
 
-        raw_keys = result.condition_keys()
-        new_keys = raw_keys - self._covered_keys
-        result.new_mcdc_pairs_covered = len(new_keys)
+        result.new_structural_coverage = self.structural_gain(result)
         result.is_redundant = (
-            self.total_mcdc_pairs > 0
-            and len(new_keys) == 0
-            and len(prior_results) >= min_suite_size
+            result.new_structural_coverage == 0 and len(prior_results) >= min_suite_size
         )
-        self._covered_keys |= new_keys
+        self.consecutive_redundant = self.consecutive_redundant + 1 if result.is_redundant else 0
 
-        if result.is_redundant:
-            self.consecutive_redundant += 1
-        else:
-            self.consecutive_redundant = 0
-
-        self._discover_conditions(result)
         self._update_totals(result)
         self._update_statement_intersection(result)
         self._update_branch_intersection(result)
-
-    def seed_conditions(self, conditions, total_mcdc_pairs: int | None = None) -> None:
-        """Pre-populate condition metadata from static CFG before generation."""
-        if total_mcdc_pairs is not None:
-            self.total_mcdc_pairs = total_mcdc_pairs
-        self._all_conditions = [c.condition for c in conditions]
-        for condition in conditions:
-            if condition.node_id is None:
-                raise RuntimeError(
-                    "Backend payload missing nodeId in /api/node/conditions. "
-                    "nodeId is required for MC/DC identity."
-                )
-            condition_id = condition.node_id
-            self._condition_id_to_text[condition_id] = condition.condition
-            self._condition_id_to_line[condition_id] = condition.line_in_function
 
     def metrics(self, tests: list[TestResult]) -> CoverageMetrics:
         """Return frozen summary suitable for serialisation and reporting."""
@@ -107,46 +67,67 @@ class CoverageState:
         return CoverageMetrics(
             statement_pct=self._statement_pct(tests),
             branch_pct=self._branch_pct(tests),
-            mcdc_pct=self._mcdc_pct(),
             covered_statements=covered_stmts,
             total_statements=self._total_statements,
             covered_branches=covered_brs,
             total_branches=self._total_branches,
-            covered_mcdc_pairs=len(self._covered_keys),
-            total_mcdc_pairs=self.total_mcdc_pairs,
         )
 
     def gap_input(
         self, tests: list[TestResult], batch_count: int
     ) -> CoverageGapInput:
         """Produce the DTO consumed by :class:`GapAnalyzer`."""
-        obligations = [
-            McdcObligation(
-                condition_id=item["condition_id"],
-                condition=item["condition"],
-                line_in_function=item["line_in_function"],
-                needs_true=item["needs_true"],
-                needs_false=item["needs_false"],
-            )
-            for item in self.unvisited_summary()
-        ]
         return CoverageGapInput(
             tests=tests,
             metrics=self.metrics(tests),
-            obligations=obligations,
-            observed_polarity_counts=self._observed_polarity_counts(tests),
             cumulative_unvisited_statements=self._cumulative_unvisited_stmts(),
             cumulative_unvisited_branches=self._cumulative_unvisited_brs(),
-            all_conditions_count=len(self._all_conditions),
-            unique_condition_ids=len(self._condition_id_to_text),
             consecutive_redundant=self.consecutive_redundant,
             batch_count=batch_count,
         )
 
-    def _mcdc_pct(self) -> float:
-        if self.total_mcdc_pairs == 0:
-            return 0.0
-        return len(self._covered_keys) / self.total_mcdc_pairs
+    def structural_gain(self, result: TestResult) -> int:
+        """Count newly covered statements and branch sides.
+
+        Node IDs provide exact cumulative set differences. AkaUT may omit IDs;
+        then monotonic coverage counts are the safe fallback.
+        """
+        if normalize_test_status(result.status) not in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}:
+            return 0
+        return self._statement_gain(result) + self._branch_gain(result)
+
+    def _statement_gain(self, result: TestResult) -> int:
+        uncovered = self._uncovered_statement_ids(result)
+        if uncovered is None:
+            return max(result.statement_coverage.visited - self._best_statement_visited, 0)
+        if self._cumulative_uncovered_stmt_ids is None:
+            return max(result.statement_coverage.visited, 0)
+        return len(self._cumulative_uncovered_stmt_ids - uncovered)
+
+    def _branch_gain(self, result: TestResult) -> int:
+        uncovered = self._uncovered_branch_keys(result)
+        if uncovered is None:
+            return max(result.branch_coverage.visited - self._best_branch_visited, 0)
+        if self._cumulative_uncovered_branch_keys is None:
+            return max(result.branch_coverage.visited, 0)
+        return len(self._cumulative_uncovered_branch_keys - uncovered)
+
+    @staticmethod
+    def _uncovered_statement_ids(result: TestResult) -> set[int] | None:
+        ids = {statement.node_id for statement in result.unvisited_statements if statement.node_id is not None}
+        return ids if ids or not result.unvisited_statements else None
+
+    @staticmethod
+    def _uncovered_branch_keys(result: TestResult) -> set[tuple[int, bool]] | None:
+        if result.unvisited_branches and not any(branch.node_id is not None for branch in result.unvisited_branches):
+            return None
+        return {
+            (branch.node_id, side)
+            for branch in result.unvisited_branches
+            if branch.node_id is not None
+            for side, visited in ((True, branch.true_visited), (False, branch.false_visited))
+            if not visited
+        }
 
     def _covered_statements(self, tests: list[TestResult]) -> int:
         if self._total_statements == 0:
@@ -226,104 +207,34 @@ class CoverageState:
                 )
         return result
 
-    def _discover_conditions(self, result: TestResult) -> None:
-        discovered_ids: dict[int, str] = {}
-        if result.condition_trace:
-            for entry in result.condition_trace:
-                condition_id = entry.identity()
-                discovered_ids[condition_id] = entry.condition.strip()
-                self._condition_id_to_line[condition_id] = entry.line_in_function
-        if result.unvisited_mcdc:
-            for entry in result.unvisited_mcdc:
-                discovered_ids[entry.identity()] = entry.condition.strip()
-
-        for condition_id, condition_text in discovered_ids.items():
-            if condition_id not in self._condition_id_to_text:
-                self._condition_id_to_text[condition_id] = condition_text
-
-        self._all_conditions = [
-            self._condition_id_to_text[cid] for cid in self._condition_id_to_text
-        ]
-
     def _update_totals(self, result: TestResult) -> None:
-        if self.total_mcdc_pairs == 0 and result.mcdc_coverage.total > 0:
-            self.total_mcdc_pairs = result.mcdc_coverage.total
         if result.statement_coverage.total > 0:
             self._total_statements = result.statement_coverage.total
         if result.branch_coverage.total > 0:
             self._total_branches = result.branch_coverage.total
+        self._best_statement_visited = max(self._best_statement_visited, result.statement_coverage.visited)
+        self._best_branch_visited = max(self._best_branch_visited, result.branch_coverage.visited)
 
     def _update_statement_intersection(self, result: TestResult) -> None:
-        test_uncovered_stmt_ids: set[int] = set()
+        uncovered = self._uncovered_statement_ids(result)
+        if uncovered is None:
+            return
         for statement in result.unvisited_statements:
             if statement.node_id is not None:
-                test_uncovered_stmt_ids.add(statement.node_id)
                 self._stmt_node_info[statement.node_id] = statement
         if self._cumulative_uncovered_stmt_ids is None:
-            self._cumulative_uncovered_stmt_ids = test_uncovered_stmt_ids
+            self._cumulative_uncovered_stmt_ids = uncovered
         else:
-            self._cumulative_uncovered_stmt_ids &= test_uncovered_stmt_ids
+            self._cumulative_uncovered_stmt_ids &= uncovered
 
     def _update_branch_intersection(self, result: TestResult) -> None:
-        test_uncovered_branch_keys: set[tuple[int, bool]] = set()
+        uncovered = self._uncovered_branch_keys(result)
+        if uncovered is None:
+            return
         for branch in result.unvisited_branches:
-            if branch.node_id is None:
-                continue
-            if not branch.true_visited:
-                test_uncovered_branch_keys.add((branch.node_id, True))
-            if not branch.false_visited:
-                test_uncovered_branch_keys.add((branch.node_id, False))
-            self._branch_node_info[branch.node_id] = branch
+            if branch.node_id is not None:
+                self._branch_node_info[branch.node_id] = branch
         if self._cumulative_uncovered_branch_keys is None:
-            self._cumulative_uncovered_branch_keys = test_uncovered_branch_keys
+            self._cumulative_uncovered_branch_keys = uncovered
         else:
-            self._cumulative_uncovered_branch_keys &= test_uncovered_branch_keys
-
-    # ------------------------------------------------------------------
-    # Public read-only helpers (still used by generator/ablation appraisal)
-    # ------------------------------------------------------------------
-
-    def unvisited_summary(self) -> list[dict]:
-        result = []
-        for condition_id, condition in self._condition_id_to_text.items():
-            key_true = ConditionKey(condition_id, True)
-            key_false = ConditionKey(condition_id, False)
-            needs_true = key_true not in self._covered_keys
-            needs_false = key_false not in self._covered_keys
-            if needs_true or needs_false:
-                result.append(
-                    {
-                        "condition_id": condition_id,
-                        "condition": condition,
-                        "line_in_function": self._condition_id_to_line.get(condition_id),
-                        "needs_true": needs_true,
-                        "needs_false": needs_false,
-                    }
-                )
-        result.sort(
-            key=lambda item: (
-                item["line_in_function"] is None,
-                item["line_in_function"]
-                if item["line_in_function"] is not None
-                else float("inf"),
-                item["condition_id"],
-            )
-        )
-        return result
-
-    def _observed_polarity_counts(
-        self, tests: list[TestResult]
-    ) -> dict[ConditionKey, int]:
-        counts: dict[ConditionKey, int] = {}
-        for test in tests:
-            if not test.condition_trace:
-                continue
-            for entry in test.condition_trace:
-                condition_id = entry.identity()
-                if entry.true_branch_visited:
-                    key = ConditionKey(condition_id, True)
-                    counts[key] = counts.get(key, 0) + 1
-                if entry.false_branch_visited:
-                    key = ConditionKey(condition_id, False)
-                    counts[key] = counts.get(key, 0) + 1
-        return counts
+            self._cumulative_uncovered_branch_keys &= uncovered

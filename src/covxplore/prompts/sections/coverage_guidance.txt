@@ -2,16 +2,11 @@ COVERAGE GUIDANCE (injected dynamically each batch):
 
 {coverage_gap}
 
-The suite coverage progress so far:
+Suite coverage progress:
   Statement : {stmt_pct}%
   Branch    : {branch_pct}%
-  MC/DC     : {mcdc_pct}% ({covered}/{total} pairs covered)
 Remaining budget: {remaining_batches} batches.
 
-Do not generate a test that repeats the same nodeId-polarity combination
-already present in a previously PASSED test — that would be a redundant test.
+Do not generate a test that repeats same reached statement or branch path already covered by a passing test.
 
-CRITICAL: Do NOT output the final status line starting with 'DONE:' until
-all coverage targets are met (100% statement, branch, and MC/DC coverage).
-If there are still uncovered obligations listed above, you MUST continue
-generating tests by calling execute_testcase_batch. Do NOT stop early!
+Do not output final DONE line until statement and branch coverage targets are met. If uncovered items remain, call execute_testcase_batch.

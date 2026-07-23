@@ -5,7 +5,6 @@ from covxplore.types import (
     CoverageGapInput,
     CoverageMetrics,
     CoverageReadable,
-    McdcObligation,
 )
 from covxplore.coverage.gap_analyzer import GapAnalyzer
 from covxplore.coverage.state import CoverageState
@@ -17,5 +16,4 @@ __all__ = [
     "CoverageReadable",
     "CoverageState",
     "GapAnalyzer",
-    "McdcObligation",
 ]

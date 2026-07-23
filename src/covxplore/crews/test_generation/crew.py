@@ -40,7 +40,7 @@ def _guard(ctx: RunContext, start_batch: int, max_forces: int = 3):
 
 @CrewBase
 class TestGenerationCrew:
-    """One-session crew for MC/DC coverage-driven test generation."""
+    """One-session crew for statement/branch coverage-driven test generation."""
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"

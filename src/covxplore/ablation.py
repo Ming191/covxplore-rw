@@ -57,7 +57,6 @@ class AblationRunner:
                     function_path=function_path,
                     prompt_variant=variant,
                     max_batches=cfg.max_batches,
-                    mcdc_target=cfg.mcdc_target,
                 )
                 results.append(generate(exp_cfg))
 
@@ -114,7 +113,8 @@ def _print_matrix_summary(results: list[GenerationResult]) -> None:
     _console.rule("[bold]Ablation Summary[/]")
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Variant", style="cyan")
-    table.add_column("MC/DC %", justify="right")
+    table.add_column("Statement %", justify="right")
+    table.add_column("Branch %", justify="right")
     table.add_column("Redundancy %", justify="right")
     table.add_column("Tokens (total)", justify="right")
     table.add_column("Time (s)", justify="right")
@@ -124,11 +124,13 @@ def _print_matrix_summary(results: list[GenerationResult]) -> None:
         m = r.to_summary_dict()["metrics"]
         table.add_row(
             r.config.prompt_variant,
-            f"{m['mcdc_coverage_pct'] * 100:.0f}%",
+            f"{m['statement_coverage_pct'] * 100:.0f}%",
+            f"{m['branch_coverage_pct'] * 100:.0f}%",
             f"{m['redundancy_rate'] * 100:.0f}%",
             f"{m['total_tokens']:,}",
             f"{m['elapsed_sec']:.1f}",
             r.stop_reason,
         )
+
 
     _console.print(table)

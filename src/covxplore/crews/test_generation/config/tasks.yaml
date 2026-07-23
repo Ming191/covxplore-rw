@@ -3,5 +3,5 @@ generate_tests:
     {task_description}
   expected_output: >
     Exactly one execute_testcase_batch tool call, then output exactly:
-    DONE: <n> candidates proposed, MC/DC=<pct>%
+    DONE: <n> candidates proposed
   agent: test_generator

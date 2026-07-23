@@ -41,26 +41,6 @@ class SourceResult:
 
 
 @dataclass
-class ConditionInfo:
-    node_id: int | None
-    condition: str
-    line_in_function: int | None
-    start_offset: int | None
-    end_offset: int | None
-
-
-@dataclass
-class ConditionsResult:
-    absolute_path: str
-    total_conditions: int
-    conditions: list[ConditionInfo]
-
-    @property
-    def total_mcdc_pairs(self) -> int:
-        return self.total_conditions * 2
-
-
-@dataclass
 class ExecuteResult:
     raw: dict[str, Any]
 
@@ -83,18 +63,6 @@ class ExecuteResult:
     @property
     def branch_coverage(self) -> dict:
         return self.raw.get("branchCoverage") or {}
-
-    @property
-    def mcdc_coverage(self) -> dict:
-        return self.raw.get("mcdcCoverage") or {}
-
-    @property
-    def unvisited_mcdc_conditions(self) -> list[dict]:
-        return self.raw.get("unvisitedMcdcConditions") or []
-
-    @property
-    def condition_trace(self) -> list[dict]:
-        return self.raw.get("conditionTrace") or []
 
     @property
     def trace_summary(self) -> dict | None:
@@ -194,26 +162,6 @@ class AkaUTClient:
             )
             for item in (data or [])
         ]
-
-    def get_node_conditions(self, absolute_path: str) -> ConditionsResult:
-        absolute_path = absolute_path.replace("\\", "/")
-        data = self._get("/api/node/conditions", {"absolutePath": absolute_path})
-        if "error" in data:
-            raise AkaUTError(data["error"])
-        return ConditionsResult(
-            absolute_path=data["absolutePath"],
-            total_conditions=data["totalConditions"],
-            conditions=[
-                ConditionInfo(
-                    node_id=c.get("nodeId"),
-                    condition=c["condition"],
-                    line_in_function=c.get("lineInFunction"),
-                    start_offset=c.get("startOffset"),
-                    end_offset=c.get("endOffset"),
-                )
-                for c in (data.get("conditions") or [])
-            ],
-        )
 
     def execute_testcase(
         self,

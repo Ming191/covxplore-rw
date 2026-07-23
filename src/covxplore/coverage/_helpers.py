@@ -4,13 +4,12 @@ from typing import NamedTuple
 
 
 class CoverageCompletion(NamedTuple):
-    mcdc: bool
     statement: bool
     branch: bool
 
     @property
     def all_done(self) -> bool:
-        return self.mcdc and self.statement and self.branch
+        return self.statement and self.branch
 
 
 def line_tag(line_in_function: int | None) -> str:

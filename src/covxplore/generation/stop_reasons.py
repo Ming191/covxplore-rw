@@ -18,7 +18,6 @@ StopReason = Literal[
 @dataclass(frozen=True)
 class StopPolicy:
     max_batches: int
-    mcdc_target: float
     redundant_streak_limit: int
     fail_streak_limit: int
 
@@ -26,7 +25,6 @@ class StopPolicy:
     def from_config(cls, config) -> "StopPolicy":
         return cls(
             max_batches=int(getattr(config, "max_batches", 10**9)),
-            mcdc_target=float(getattr(config, "mcdc_target", 1.0)),
             redundant_streak_limit=int(getattr(config, "redundant_streak_limit", 3)),
             fail_streak_limit=int(getattr(config, "fail_streak_limit", 3)),
         )
@@ -46,20 +44,9 @@ class StopPolicy:
             and metrics.total_branches == 0
         ):
             return False
-        mcdc_done = (
-            metrics.total_mcdc_pairs == 0
-            or metrics.mcdc_pct >= self.mcdc_target
-            or not suite.coverage.unvisited_summary()
-        )
-        stmt_done = (
-            metrics.total_statements == 0
-            or metrics.covered_statements >= metrics.total_statements
-        )
-        branch_done = (
-            metrics.total_branches == 0
-            or metrics.covered_branches >= metrics.total_branches
-        )
-        return mcdc_done and stmt_done and branch_done
+        statement_done = metrics.total_statements == 0 or metrics.covered_statements >= metrics.total_statements
+        branch_done = metrics.total_branches == 0 or metrics.covered_branches >= metrics.total_branches
+        return statement_done and branch_done
 
     def hard_stop_reason(self, suite) -> StopReason | None:
         if suite.coverage.consecutive_redundant >= self.redundant_streak_limit:

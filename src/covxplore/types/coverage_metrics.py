@@ -6,10 +6,7 @@ from dataclasses import dataclass
 class CoverageMetrics:
     statement_pct: float = 0.0
     branch_pct: float = 0.0
-    mcdc_pct: float = 0.0
     covered_statements: int = 0
     total_statements: int = 0
     covered_branches: int = 0
     total_branches: int = 0
-    covered_mcdc_pairs: int = 0
-    total_mcdc_pairs: int = 0

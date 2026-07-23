@@ -7,13 +7,11 @@ from typing import Any, Mapping
 from pydantic import BaseModel, Field
 
 from covxplore.coverage.state import CoverageState
-from covxplore.generation.prompt_context import seed_suite_conditions
 from covxplore.generation.stop_reasons import StopPolicy, StopReason
 from covxplore.generation.tokens import TokenLedger
 from covxplore.observability import extract_trace_id, flush_observability, get_trace_url
 from covxplore.tools.execute_testcase import RunContext
 from covxplore.types import (
-    ConditionKey,
     TestResult,
     TestSuite,
     UnvisitedBranch,
@@ -33,7 +31,7 @@ class GenerationFlowState(BaseModel):
 
 
 class TestSuiteCodec:
-    VERSION = 2
+    VERSION = 3
 
     def dump_suite(self, suite: TestSuite) -> dict:
         return {
@@ -77,21 +75,7 @@ class TestSuiteCodec:
 
     def _dump_coverage(self, coverage: CoverageState) -> dict:
         return {
-            "total_mcdc_pairs": coverage.total_mcdc_pairs,
             "consecutive_redundant": coverage.consecutive_redundant,
-            "_covered_keys": [
-                {"condition_id": key.condition_id, "polarity": key.polarity}
-                for key in sorted(coverage._covered_keys)
-            ],
-            "_condition_id_to_text": [
-                {"condition_id": key, "condition": value}
-                for key, value in sorted(coverage._condition_id_to_text.items())
-            ],
-            "_condition_id_to_line": [
-                {"condition_id": key, "line_in_function": value}
-                for key, value in sorted(coverage._condition_id_to_line.items())
-            ],
-            "_all_conditions": list(coverage._all_conditions),
             "_cumulative_uncovered_stmt_ids": (
                 None
                 if coverage._cumulative_uncovered_stmt_ids is None
@@ -119,22 +103,7 @@ class TestSuiteCodec:
 
     def _load_coverage(self, data: Mapping[str, Any]) -> CoverageState:
         coverage = CoverageState()
-        coverage.total_mcdc_pairs = self._non_negative_int(data.get("total_mcdc_pairs"), "total_mcdc_pairs")
         coverage.consecutive_redundant = self._non_negative_int(data.get("consecutive_redundant"), "consecutive_redundant")
-        coverage._covered_keys = {
-            ConditionKey(int(item["condition_id"]), bool(item["polarity"]))
-            for item in data.get("_covered_keys") or []
-        }
-        coverage._condition_id_to_text = {
-            int(item["condition_id"]): str(item["condition"])
-            for item in data.get("_condition_id_to_text") or []
-        }
-        coverage._condition_id_to_line = {
-            int(item["condition_id"]): item.get("line_in_function")
-            for item in data.get("_condition_id_to_line") or []
-        }
-        coverage._all_conditions = list(data.get("_all_conditions") or [])
-
         stmt_ids = data.get("_cumulative_uncovered_stmt_ids")
         coverage._cumulative_uncovered_stmt_ids = None if stmt_ids is None else {int(node_id) for node_id in stmt_ids}
 
@@ -183,7 +152,6 @@ class GenerationRuntimeSession:
 
     def open(self, console=None) -> TestSuite:
         suite = self.run_context.reset_suite(self.config.function_path, self.config.run_id)
-        seed_suite_conditions(suite, console)
         return suite
 
     def active_suite(self) -> TestSuite:

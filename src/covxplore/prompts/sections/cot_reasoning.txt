@@ -1,20 +1,11 @@
-Before writing each test body, explicitly reason through the following steps
-(you may output this reasoning as a short comment block inside the test body):
+Before writing each test body, reason through these steps:
 
-STEP 1 — Identify the target condition:
-  State the target as nodeId (condition text), e.g., 49 ("x > 0").
-  State which polarity you need: TRUE branch or FALSE branch.
+STEP 1 — Identify an uncovered target:
+  Choose an uncovered statement or branch. For a branch, state nodeId (condition text) and required TRUE or FALSE polarity.
 
-STEP 2 — Find an independence pair:
-  Identify an existing passing test (by name) whose inputs you will vary.
-  State which variable you will change and by how much so that ONLY the
-  target condition's truth value flips while the decision outcome also flips.
-  If no existing test exists yet, choose inputs from scratch.
+STEP 2 — Determine concrete input values:
+  Work out exact numeric, pointer, or struct values needed to reach the target.
+  Check boundary conditions, null pointers, and control-flow prerequisites.
 
-STEP 3 — Determine concrete input values:
-  Work out the exact numeric / pointer / struct values needed.
-  Check boundary conditions (off-by-one, integer overflow, null pointer).
-
-STEP 4 — Write the test body:
-  Declare all input variables, call the function, and capture the return value
-  or observable side effect.
+STEP 3 — Write the test body:
+  Declare all input variables, call the function, and capture return value or observable side effect.

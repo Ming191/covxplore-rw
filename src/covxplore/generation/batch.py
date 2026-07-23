@@ -34,7 +34,7 @@ class BatchMergeSummary:
 
 
 def _marginal_gain(suite: TestSuite, result: TestResult) -> int:
-    return len(result.condition_keys() - suite.coverage._covered_keys)
+    return suite.coverage.structural_gain(result)
 
 
 def _is_coverage_result(result: TestResult) -> bool:
@@ -61,7 +61,7 @@ def merge_batch_results(
     summary = BatchMergeSummary()
     for _, result in ranked:
         gain = _marginal_gain(suite, result)
-        if _is_coverage_result(result) and gain == 0 and suite.coverage.has_mcdc:
+        if _is_coverage_result(result) and gain == 0 and suite.tests:
             result.is_redundant = True
             summary.rejected_redundant.append(result)
             suite.rejected_tests.append(result)

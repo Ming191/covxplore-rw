@@ -1,6 +1,6 @@
 # Covxplore
 
-Covxplore is a multi-agent system for automated C/C++ test case generation, targeting improved MC/DC coverage. It leverages an iterative loop to perform ablation studies on prompts, identifying the most effective prompting techniques and components.
+Covxplore is a multi-agent system for automated C/C++ test case generation, targeting statement and branch coverage. It leverages an iterative loop to perform ablation studies on prompts, identifying the most effective prompting techniques and components.
 
 ## Installation
 
@@ -39,7 +39,6 @@ covxplore-gen \
 - `--variant`, `-v`: Prompt variant name (default: value from `Settings.default_prompt_variant`).
 - `--out`, `-o`: Directory to write the summary JSON. Defaults to current directory.
 - `--max-batches`: Override max batch count setting.
-- `--mcdc-target`: Override MC/DC target 0.0–1.0 setting.
 
 ### `covxplore-ablate`
 

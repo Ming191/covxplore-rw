@@ -3,14 +3,13 @@
 import pytest
 
 from covxplore.api_client import AkaUTError, ExecuteResult
-from covxplore.types import ConditionTraceEntry, TestResult, TestSuite
+from covxplore.types import TestResult, TestSuite
 from covxplore.status import TestStatus
 from covxplore.tools.execute_testcase import (
     ExecuteTestcaseBatchTool,
     HardStop,
     RunContext,
     ExecuteTestcaseTool,
-    _format_condition_trace,
 )
 
 
@@ -122,7 +121,6 @@ class TestExecuteTestcaseToolRobustResponses:
 
         assert "Stmt: 0/0 (0%)" in output
         assert "Branch: 0/0 (0%)" in output
-        assert "MC/DC: 0/0 (0%)" in output
 
     def test_none_trace_and_unvisited_lists_do_not_crash(self):
         raw = {
@@ -313,13 +311,16 @@ class TestExecuteTestcaseToolRobustResponses:
     def test_tool_hard_stops_on_redundant_streak(self, monkeypatch):
         ctx = RunContext()
         suite = ctx.reset_suite("/x.cpp::f()", "run-1")
-        suite.coverage.total_mcdc_pairs = 2
         suite.coverage.consecutive_redundant = 2
 
         settings = type(
             "Settings",
             (),
-            {"min_suite_size": 0, "redundant_streak_limit": 3, "mcdc_target": 1.0},
+            {
+                "min_suite_size": 0,
+                "redundant_streak_limit": 3,
+                "fail_streak_limit": 3,
+            },
         )()
         monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
         # Omit statement/branch coverage so _total_statements/_total_branches stay 0
@@ -380,7 +381,6 @@ class TestExecuteTestcaseBatchTool:
 
         ctx = RunContext()
         suite = ctx.reset_suite("/x.cpp::f()", "run-1")
-        suite.coverage.total_mcdc_pairs = 2
         executor = Executor()
 
         output = ExecuteTestcaseBatchTool(run_context=ctx, executor=executor)._run(
@@ -470,7 +470,6 @@ class TestExecuteTestcaseBatchTool:
                 "min_suite_size": 0,
                 "redundant_streak_limit": 3,
                 "fail_streak_limit": 3,
-                "mcdc_target": 1.0,
             },
         )()
         monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
@@ -507,13 +506,11 @@ class TestExecuteTestcaseBatchTool:
                 "min_suite_size": 0,
                 "redundant_streak_limit": 3,
                 "fail_streak_limit": 5,
-                "mcdc_target": 1.0,
             },
         )()
         monkeypatch.setattr("covxplore.tools.execute_testcase.get_settings", lambda: settings)
         ctx = RunContext()
         suite = ctx.reset_suite("/x.cpp::f()", "run-1")
-        suite.coverage.total_mcdc_pairs = 1
         suite.coverage.consecutive_redundant = 2
 
         with pytest.raises(HardStop) as exc:
@@ -522,7 +519,7 @@ class TestExecuteTestcaseBatchTool:
             )
 
         assert exc.value.reason == "redundant_streak"
-        assert suite.tests == []
+        assert [test.test_name for test in suite.tests] == ["dupe"]
         assert suite.coverage.consecutive_redundant == 3
 
     def test_batch_arun_requires_active_suite(self):
@@ -532,25 +529,6 @@ class TestExecuteTestcaseBatchTool:
 
         assert "could not resolve target function path" in output
 
-
-def test_format_condition_trace_sorts_mixed_node_ids_without_crashing():
-    result = TestResult(
-        test_name="t1",
-        test_body="f();",
-        status=TestStatus.PASSED.value,
-        condition_trace=[
-            ConditionTraceEntry.model_construct(node_id="b", condition="b", true_branch_visited=True, false_branch_visited=False, line_in_function=None),
-            ConditionTraceEntry.model_construct(node_id=1, condition="a", true_branch_visited=False, false_branch_visited=True, line_in_function=None),
-            ConditionTraceEntry.model_construct(node_id=None, condition="c", true_branch_visited=True, false_branch_visited=True, line_in_function=None),
-        ],
-    )
-
-    output = _format_condition_trace(result)
-
-    assert output is not None
-    assert "[node:1 line+?] 'a' TRUE=NO FALSE=YES" in output
-    assert "[node:b line+?] 'b' TRUE=YES FALSE=NO" in output
-    assert "[node:? line+?] 'c' TRUE=YES FALSE=YES" in output
 
 
 def test_fatal_tool_error_is_normal_exception():

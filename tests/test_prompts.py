@@ -200,5 +200,5 @@ class TestPromptBuilderTaskDescription:
         text = builder.task_description(function_path="/x.cpp::f()")
 
         assert "No search/source tools are available" in text
-        assert "preloaded conditions, source" in text
+        assert "preloaded source" in text
         assert "search_nodes then get_node_source" not in text

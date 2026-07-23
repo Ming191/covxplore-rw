@@ -24,7 +24,7 @@ class GenerateTestAction(BaseModel):
     )
     target_node_id: int | None = Field(
         default=None,
-        description="Optional MC/DC condition node id this test is targeting.",
+        description="Optional branch condition node id this test is targeting.",
     )
     target_polarity: Literal["TRUE", "FALSE"] | None = Field(
         default=None,
@@ -77,5 +77,5 @@ class GenerateTestBatchAnyAction(BaseModel):
     candidates: list[GenerateTestAction] = Field(
         ...,
         min_length=1,
-        description="Batch of distinct test candidates; use one candidate per useful uncovered obligation and avoid duplicates.",
+        description="Batch of distinct test candidates; cover distinct statement and branch gaps and avoid duplicates.",
     )

@@ -19,7 +19,7 @@ def run_generation() -> None:
     """Single generation run — one function, one prompt variant."""
     parser = argparse.ArgumentParser(
         prog="covxplore-gen",
-        description="Generate MC/DC-covering tests for one C/C++ function.",
+        description="Generate statement- and branch-covering tests for one C/C++ function.",
     )
     parser.add_argument(
         "--path", "-p", required=True,
@@ -37,10 +37,6 @@ def run_generation() -> None:
         "--max-batches", type=int, default=None,
         help="Override max batches (default: Settings.max_batches).",
     )
-    parser.add_argument(
-        "--mcdc-target", type=float, default=None,
-        help="Override MC/DC target 0.0–1.0 (default: Settings.mcdc_target).",
-    )
     args = parser.parse_args()
 
     from covxplore.config import get_settings
@@ -53,7 +49,6 @@ def run_generation() -> None:
         function_path=args.path,
         prompt_variant=variant,
         max_batches=args.max_batches if args.max_batches is not None else cfg.max_batches,
-        mcdc_target=args.mcdc_target if args.mcdc_target is not None else cfg.mcdc_target,
     )
 
     result = generate(exp_cfg)
@@ -117,7 +112,7 @@ def run_parallel() -> None:
     parser = argparse.ArgumentParser(
         prog="covxplore-pipeline",
         description=(
-            "Run MC/DC ablation for every function listed in a paths file, "
+            "Run statement/branch ablation for every function listed in a paths file, "
             "in parallel. Results land in per-function subdirectories under --out, "
             "and a combined pipeline_summary.csv is written to --out."
         ),

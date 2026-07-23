@@ -1,133 +1,76 @@
 import inspect
 
 from covxplore.coverage.gap_analyzer import GapAnalyzer
-from covxplore.types import CoverageGapInput, CoverageMetrics
 from covxplore.coverage.state import CoverageState
-from covxplore.types import (
-    ConditionKey,
-    ConditionTraceEntry,
-    CoverageDetail,
-    TestResult,
-    TestSuite,
-    UnvisitedBranch,
-    UnvisitedStatement,
-)
+from covxplore.types import CoverageDetail, TestResult, UnvisitedBranch, UnvisitedStatement
 
 
-def _result(
-    name: str,
-    *,
-    node_id: int = 1,
-    polarity: bool = True,
-    stmt_unvisited: list[UnvisitedStatement] | None = None,
-    branch_unvisited: list[UnvisitedBranch] | None = None,
-) -> TestResult:
+def _result(name: str, *, statements=(), branches=(), stmt=(0, 3), branch=(0, 4)):
     return TestResult(
         test_name=name,
-        test_body="void test() {}",
+        test_body=name,
         status="PASSED",
-        condition_trace=[
-            ConditionTraceEntry(
-                node_id=node_id,
-                condition=f"c{node_id}",
-                true_branch_visited=polarity,
-                false_branch_visited=not polarity,
-                line_in_function=node_id,
-            )
-        ],
-        statement_coverage=CoverageDetail(visited=1, total=3, progress=1 / 3),
-        branch_coverage=CoverageDetail(visited=1, total=4, progress=0.25),
-        mcdc_coverage=CoverageDetail(visited=1, total=2, progress=0.5),
-        unvisited_statements=stmt_unvisited or [],
-        unvisited_branches=branch_unvisited or [],
+        statement_coverage=CoverageDetail(visited=stmt[0], total=stmt[1]),
+        branch_coverage=CoverageDetail(visited=branch[0], total=branch[1]),
+        unvisited_statements=list(statements),
+        unvisited_branches=list(branches),
     )
 
 
-def test_coverage_state_accumulates_mcdc_and_redundancy() -> None:
-    state = CoverageState(total_mcdc_pairs=1)
-    prior: list[TestResult] = []
+def test_statement_gain_uses_cumulative_unvisited_ids():
+    state = CoverageState()
+    first = _result("first", stmt=(1, 3), statements=[
+        UnvisitedStatement(node_id=2, statement="b;"),
+        UnvisitedStatement(node_id=3, statement="c;"),
+    ])
+    second = _result("second", stmt=(2, 3), statements=[
+        UnvisitedStatement(node_id=3, statement="c;"),
+    ])
+    state.add_result(first, prior_results=[])
+    state.add_result(second, prior_results=[first])
+    assert first.new_structural_coverage == 1
+    assert second.new_structural_coverage == 1
+    assert [item.node_id for item in state._cumulative_unvisited_stmts()] == [3]
 
-    first = _result("t1")
-    state.add_result(first, prior_results=prior)
-    prior.append(first)
-    assert state._covered_keys == {ConditionKey(1, True)}
-    assert first.new_mcdc_pairs_covered == 1
-    assert first.is_redundant is False
 
-    for index in range(2, 5):
-        result = _result(f"t{index}")
-        state.add_result(result, prior_results=prior)
-        prior.append(result)
+def test_branch_side_gain_uses_cumulative_unvisited_ids():
+    state = CoverageState()
+    first = _result("first", branch=(0, 2), branches=[
+        UnvisitedBranch(node_id=10, condition="x", true_visited=False, false_visited=False),
+    ])
+    second = _result("second", branch=(1, 2), branches=[
+        UnvisitedBranch(node_id=10, condition="x", true_visited=True, false_visited=False),
+    ])
+    state.add_result(first, prior_results=[])
+    state.add_result(second, prior_results=[first])
+    assert second.new_structural_coverage == 1
+    assert state._cumulative_unvisited_brs()[0].true_visited is True
 
-    assert prior[-1].is_redundant is True
+
+def test_missing_ids_fall_back_to_monotonic_counts():
+    state = CoverageState()
+    first = _result("first", stmt=(1, 3), statements=[UnvisitedStatement(node_id=None, statement="x;")])
+    second = _result("second", stmt=(2, 3), statements=[UnvisitedStatement(node_id=None, statement="x;")])
+    state.add_result(first, prior_results=[])
+    state.add_result(second, prior_results=[first])
+    assert first.new_structural_coverage == 1
+    assert second.new_structural_coverage == 1
+
+
+def test_later_zero_gain_is_redundant():
+    state = CoverageState()
+    first = _result("first", stmt=(1, 3))
+    state.add_result(first, prior_results=[])
+    duplicate = _result("duplicate", stmt=(1, 3))
+    state.add_result(duplicate, prior_results=[first], min_suite_size=1)
+    assert duplicate.is_redundant is True
     assert state.consecutive_redundant == 1
 
 
-def test_coverage_state_tracks_statement_and_branch_intersections() -> None:
+def test_gap_analyzer_uses_structural_gap_input():
     state = CoverageState()
-    first = _result(
-        "t1",
-        stmt_unvisited=[
-            UnvisitedStatement(node_id=1, statement="a;", line_in_function=1),
-            UnvisitedStatement(node_id=2, statement="b;", line_in_function=2),
-        ],
-        branch_unvisited=[
-            UnvisitedBranch(node_id=10, condition="x", true_visited=False, false_visited=False),
-        ],
-    )
-    second = _result(
-        "t2",
-        node_id=2,
-        stmt_unvisited=[UnvisitedStatement(node_id=2, statement="b;", line_in_function=2)],
-        branch_unvisited=[
-            UnvisitedBranch(node_id=10, condition="x", true_visited=True, false_visited=False),
-        ],
-    )
-
-    state.add_result(first, prior_results=[])
-    state.add_result(second, prior_results=[first])
-
-    assert state._covered_statements([first, second]) == 2
-    assert [s.node_id for s in state._cumulative_unvisited_stmts()] == [2]
-    branches = state._cumulative_unvisited_brs()
-    assert len(branches) == 1
-    assert branches[0].true_visited is True
-    assert branches[0].false_visited is False
-
-
-def test_coverage_state_metrics_and_gap_input_are_explicit_dtos() -> None:
-    state = CoverageState(total_mcdc_pairs=2)
-    first = _result("t1")
-    state.add_result(first, prior_results=[])
-
-    metrics = state.metrics([first])
-    gap_input = state.gap_input([first], batch_count=1)
-
-    assert isinstance(metrics, CoverageMetrics)
-    assert metrics.mcdc_pct == 0.5
-    assert metrics.covered_mcdc_pairs == 1
-    assert metrics.total_mcdc_pairs == 2
-    assert isinstance(gap_input, CoverageGapInput)
-    assert gap_input.tests == [first]
-    assert gap_input.metrics == metrics
-    assert gap_input.batch_count == 1
-
-
-def test_gap_analyzer_accepts_gap_input_not_suite_object() -> None:
-    suite = TestSuite(function_path="/f.cpp::foo()")
-    suite.coverage.total_mcdc_pairs = 2
-    suite.add_result(_result("t1"))
-
-    direct = GapAnalyzer().analyze(suite.coverage.gap_input(suite.tests, suite.batch_count))
-
-    assert "The following MC/DC condition polarities are NOT yet covered" in direct.text
+    result = _result("first", stmt=(1, 3), branch=(1, 2))
+    state.add_result(result, prior_results=[])
+    gap = GapAnalyzer().analyze(state.gap_input([result], batch_count=1))
+    assert "MC/DC" not in gap.text
     assert "suite" not in str(inspect.signature(GapAnalyzer.analyze))
-
-
-def test_prompt_text_constants_module_exists_and_is_used() -> None:
-    from covxplore.coverage import prompt_text
-
-    assert prompt_text.NO_TESTS_WITH_MCDC.startswith("No tests executed yet.")
-    source = inspect.getsource(GapAnalyzer.analyze)
-    assert "No tests executed yet. Target is" not in source
-    assert "SUCCESS! All coverage targets" not in source

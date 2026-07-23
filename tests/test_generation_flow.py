@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from covxplore.generation.prompt_context import StaticPromptData
 from covxplore.generator import GenerationConfig
 from covxplore.flows.generation_flow import GenerationFlowRunner
-from covxplore.types import ConditionTraceEntry, CoverageDetail, TestResult
+from covxplore.types import CoverageDetail, TestResult, UnvisitedBranch, UnvisitedStatement
 
 
 class _FakeBuilder:
@@ -34,23 +34,13 @@ class _FakeCrewInst:
         ctx = self.calls[-1]["run_context"]
         suite = ctx.active_suite()
         call_index = len(self.calls)
-        false_visited = self.cover_false_on_second and call_index >= 2
         for i in range(self.candidates_per_batch):
             result = TestResult(
-                test_name=f"t{call_index}_{i}",
-                test_body="f();",
-                status="PASSED",
-                statement_coverage=CoverageDetail(visited=0, total=0, progress=0.0),
-                branch_coverage=CoverageDetail(visited=0, total=0, progress=0.0),
-                mcdc_coverage=CoverageDetail(visited=call_index, total=2, progress=call_index / 2),
-                condition_trace=[
-                    ConditionTraceEntry(
-                        node_id=1,
-                        condition="c1",
-                        true_branch_visited=True,
-                        false_branch_visited=false_visited,
-                    )
-                ],
+                test_name=f"t{call_index}_{i}", test_body="f();", status="PASSED",
+                statement_coverage=CoverageDetail(visited=1, total=3),
+                branch_coverage=CoverageDetail(visited=1, total=3),
+                unvisited_statements=[UnvisitedStatement(node_id=2, statement="later")],
+                unvisited_branches=[UnvisitedBranch(node_id=2, condition="later", true_visited=False, false_visited=False)],
             )
             suite.add_result(result, min_suite_size=99)
         suite.record_batch(False)
@@ -65,7 +55,6 @@ def test_flow_spawns_new_crew_per_batch_and_aggregates_tokens(monkeypatch):
 
     monkeypatch.setattr("covxplore.flows.generation_flow.init_observability", lambda: None)
     monkeypatch.setattr("covxplore.flows.generation_flow.trace_observation", _null_trace)
-    monkeypatch.setattr("covxplore.generation.runtime_session.seed_suite_conditions", lambda suite, console=None: None)
     monkeypatch.setattr("covxplore.generation.tokens.TokenLedger.record_trace", lambda self, trace_id: None)
 
     config = GenerationConfig(
@@ -77,13 +66,12 @@ def test_flow_spawns_new_crew_per_batch_and_aggregates_tokens(monkeypatch):
     config.redundant_streak_limit = 99
     result = GenerationFlowRunner(
         crew_builder=crew_builder,
-        static_fetcher=lambda path: StaticPromptData("conditions", "context", "source"),
+        static_fetcher=lambda path: StaticPromptData("context", "source"),
     ).run(config)
 
-    assert result.suite.coverage.total_mcdc_pairs == 2
     assert len(calls) == 2
     assert [call["start_batch"] for call in calls] == [0, 1]
-    assert result.stop_reason == "coverage_target"
+    assert result.stop_reason == "max_batches"
     assert result.total_input_tokens == 20
     assert result.total_output_tokens == 40
     assert result.batches_used == 2
@@ -105,7 +93,6 @@ def test_flow_stops_on_max_batches_not_candidate_count(monkeypatch):
 
     monkeypatch.setattr("covxplore.flows.generation_flow.init_observability", lambda: None)
     monkeypatch.setattr("covxplore.flows.generation_flow.trace_observation", _null_trace)
-    monkeypatch.setattr("covxplore.generation.runtime_session.seed_suite_conditions", lambda suite, console=None: None)
     monkeypatch.setattr("covxplore.generation.tokens.TokenLedger.record_trace", lambda self, trace_id: None)
 
     config = GenerationConfig(
@@ -117,7 +104,7 @@ def test_flow_stops_on_max_batches_not_candidate_count(monkeypatch):
     config.redundant_streak_limit = 99
     result = GenerationFlowRunner(
         crew_builder=crew_builder,
-        static_fetcher=lambda path: StaticPromptData("conditions", "context", "source"),
+        static_fetcher=lambda path: StaticPromptData("context", "source"),
     ).run(config)
 
     assert len(calls) == 3

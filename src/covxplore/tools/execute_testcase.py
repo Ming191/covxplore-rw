@@ -20,13 +20,11 @@ from covxplore.config import get_settings
 from covxplore.driver.contract import ContractViolation
 from covxplore.driver import AkaUTExecutor, DriverContractValidator, TestCaseExecutor
 from covxplore.types import (
-    ConditionTraceEntry,
     CoverageDetail,
     TestResult,
     TestSuite,
     TraceSummary,
     UnvisitedBranch,
-    UnvisitedMcdc,
     UnvisitedStatement,
 )
 from covxplore.coverage.gap_analyzer import GapAnalyzer
@@ -225,7 +223,7 @@ class ExecuteTestcaseBatchTool(BaseTool):
     name: str = "execute_testcase_batch"
     description: str = (
         "Compile and execute a batch of 3-5 C++ test driver bodies for the active target function. "
-        "Prefer distinct nodeId/polarity targets. Returns accepted tests, redundant rejections, "
+        "Prefer distinct structural targets. Returns accepted tests, redundant rejections, "
         "suite coverage, and remaining gap guidance."
     )
     args_schema: type[BaseModel] = GenerateTestBatchAction
@@ -331,7 +329,7 @@ class ExecuteTestcaseBatchTool(BaseTool):
 class ExecuteTestcaseBatchAnyTool(ExecuteTestcaseBatchTool):
     description: str = (
         "Compile and execute one broad batch of C++ test driver bodies for the active target function. "
-        "Use one distinct candidate per uncovered nodeId/polarity obligation; avoid duplicate path shapes. "
+        "Use one distinct candidate per useful uncovered structural gap; avoid duplicate path shapes. "
         "Large batches are allowed for one-shot coverage planning but produce long feedback."
     )
     args_schema: type[BaseModel] = GenerateTestBatchAnyAction
@@ -382,7 +380,7 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
     lines.append(
         "Accepted: "
         + (
-            ", ".join(f"{r.test_name}({r.status}, +{r.new_mcdc_pairs_covered})" for r in summary.accepted)
+            ", ".join(f"{r.test_name}({r.status}, +{r.new_structural_coverage})" for r in summary.accepted)
             if summary.accepted
             else "none"
         )
@@ -402,8 +400,6 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
     lines.append(
         f"Suite best → Stmt: {metrics.statement_pct * 100:.0f}% | "
         f"Branch: {metrics.branch_pct * 100:.0f}% | "
-        f"MC/DC: {metrics.covered_mcdc_pairs}/{metrics.total_mcdc_pairs} "
-        f"({metrics.mcdc_pct * 100:.0f}%) | "
         f"batch={suite.batch_count} | redundancy={suite.redundancy_rate * 100:.0f}%"
     )
 
@@ -430,7 +426,7 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
 def _format_rejected_redundant_details(results: list[TestResult]) -> str:
     if not results:
         return ""
-    lines = ["Redundant diagnostics (0 new MC/DC pairs):"]
+    lines = ["Redundant diagnostics (0 new structural coverage):"]
     for result in results[:3]:
         target = (
             f" target=node:{result.target_node_id} {result.target_polarity}"
@@ -441,10 +437,6 @@ def _format_rejected_redundant_details(results: list[TestResult]) -> str:
         target_status = _target_observation_status(result)
         if target_status:
             lines.append(f"  Target observation: {target_status}")
-        trace_lines = _condition_trace_lines(result, max_lines=8, preserve_order=True)
-        if trace_lines:
-            lines.append("  Actual condition order:")
-            lines.extend(f"    {line}" for line in trace_lines)
     if len(results) > 3:
         lines.append(f"- ... and {len(results) - 3} more redundant candidate(s)")
     lines.append(
@@ -455,21 +447,7 @@ def _format_rejected_redundant_details(results: list[TestResult]) -> str:
 
 
 def _target_observation_status(result: TestResult) -> str:
-    if result.target_node_id is None:
-        return ""
-    target_entries = [e for e in result.condition_trace if e.node_id == result.target_node_id]
-    if not target_entries:
-        return f"node:{result.target_node_id} was not present in trace"
-    entry = target_entries[-1]
-    wanted = (result.target_polarity or "").upper()
-    if wanted == "TRUE":
-        return "target TRUE observed" if entry.true_branch_visited else "target TRUE not observed"
-    if wanted == "FALSE":
-        return "target FALSE observed" if entry.false_branch_visited else "target FALSE not observed"
-    return (
-        f"node:{result.target_node_id} observed TRUE={_yes(entry.true_branch_visited)} "
-        f"FALSE={_yes(entry.false_branch_visited)}"
-    )
+    return "target metadata is advisory branch metadata"
 
 
 def _yes(value: bool) -> str:
@@ -512,20 +490,6 @@ def _result_from_execute_result(
             total=raw.branch_coverage.get("total", 0),
             progress=raw.branch_coverage.get("progress", 0.0),
         ),
-        mcdc_coverage=CoverageDetail(
-            visited=raw.mcdc_coverage.get("visited", 0),
-            total=raw.mcdc_coverage.get("total", 0),
-            progress=raw.mcdc_coverage.get("progress", 0.0),
-        ),
-        unvisited_mcdc=[
-            UnvisitedMcdc(
-                node_id=u.get("nodeId"),
-                condition=u.get("condition", ""),
-                true_branch_visited=u.get("trueBranchVisited", False),
-                false_branch_visited=u.get("falseBranchVisited", False),
-            )
-            for u in raw.unvisited_mcdc_conditions
-        ],
         unvisited_statements=[
             UnvisitedStatement(
                 node_id=s.get("nodeId"),
@@ -547,18 +511,6 @@ def _result_from_execute_result(
                 end_offset=b.get("endOffsetInFunction"),
             )
             for b in raw.unvisited_branches
-        ],
-        condition_trace=[
-            ConditionTraceEntry(
-                node_id=e.get("nodeId"),
-                condition=e.get("condition", ""),
-                true_branch_visited=e.get("trueBranchVisited", False),
-                false_branch_visited=e.get("falseBranchVisited", False),
-                line_in_function=e.get("lineInFunction"),
-                start_offset_in_function=e.get("startOffsetInFunction"),
-                end_offset_in_function=e.get("endOffsetInFunction"),
-            )
-            for e in raw.condition_trace
         ],
         trace_summary=_parse_trace_summary(raw.trace_summary),
         target_node_id=target_node_id,
@@ -594,15 +546,14 @@ def _format_summary(
     action_warnings: list[str] | None = None,
 ) -> str:
     lines = []
-    redundant_tag = " [REDUNDANT — 0 new MC/DC pairs]" if result.is_redundant else ""
+    redundant_tag = " [REDUNDANT — 0 new structural coverage]" if result.is_redundant else ""
     lines.append(f"===  {result.test_name} | {result.status}{redundant_tag} ===")
     s = result.statement_coverage
     b = result.branch_coverage
-    m = result.mcdc_coverage
     lines.append(
-        f"This test  → Stmt: {s.visited}/{s.total} ({s.progress * 100:.0f}%) | "
+        f"This test → Stmt: {s.visited}/{s.total} ({s.progress * 100:.0f}%) | "
         f"Branch: {b.visited}/{b.total} ({b.progress * 100:.0f}%) | "
-        f"MC/DC: {m.visited}/{m.total} ({m.progress * 100:.0f}%) +{result.new_mcdc_pairs_covered} new pairs"
+        f"+{result.new_structural_coverage} new structural coverage"
     )
     if result.target_node_id is not None:
         lines.append(
@@ -617,8 +568,6 @@ def _format_summary(
         lines.append(
             f"Suite best → Stmt: {metrics.statement_pct * 100:.0f}% | "
             f"Branch: {metrics.branch_pct * 100:.0f}% | "
-            f"MC/DC: {metrics.covered_mcdc_pairs}/{metrics.total_mcdc_pairs} "
-            f"({metrics.mcdc_pct * 100:.0f}%) | "
             f"batch={suite.batch_count} | "
             f"redundancy={suite.redundancy_rate * 100:.0f}%"
         )
@@ -631,60 +580,9 @@ def _format_summary(
         lines.append("")
         lines.append(gap)
 
-    trace_block = _format_condition_trace(result)
-    if trace_block:
-        lines.append("")
-        lines.append(trace_block)
-
     if result.status != TestStatus.PASSED.value:
         log = _format_execution_log(result)
         if log:
             lines.append(f"\nExecution log:\n{log}")
 
     return "\n".join(lines)
-
-
-def _format_condition_trace(result: TestResult) -> str | None:
-    trace_lines = _condition_trace_lines(result)
-    if not trace_lines or is_failure_status(result.status):
-        return None
-    return "\n".join(["Condition evaluation this test:", *trace_lines])
-
-
-def _condition_trace_lines(
-    result: TestResult,
-    max_lines: int | None = None,
-    *,
-    preserve_order: bool = False,
-) -> list[str]:
-    if not result.condition_trace:
-        return []
-    entries = list(result.condition_trace)
-    if not preserve_order:
-        entries = sorted(
-            entries,
-            key=lambda e: (
-                *_sort_value(e.node_id),
-                *_sort_value(e.line_in_function),
-                e.condition,
-            ),
-        )
-    if max_lines is not None:
-        entries = entries[:max_lines]
-    lines = []
-    for index, entry in enumerate(entries, start=1):
-        t_mark = _yes(entry.true_branch_visited)
-        f_mark = _yes(entry.false_branch_visited)
-        node_tag = entry.node_id if entry.node_id is not None else "?"
-        line_tag = (
-            f"line+{entry.line_in_function}"
-            if entry.line_in_function is not None
-            else "line+?"
-        )
-        prefix = f"{index}. " if preserve_order else ""
-        lines.append(
-            f"{prefix}[node:{node_tag} {line_tag}] {entry.condition!r} TRUE={t_mark} FALSE={f_mark}"
-        )
-    if max_lines is not None and len(result.condition_trace) > max_lines:
-        lines.append(f"... and {len(result.condition_trace) - max_lines} more")
-    return lines

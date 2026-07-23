@@ -40,10 +40,6 @@ class GenerationFlow(Flow[GenerationFlowState]):
         config = _config_from_dict(self.state.config)
         session = GenerationRuntimeSession(config)
         suite = session.open(self._console)
-        if not suite.coverage.has_mcdc:
-            self._console.print(
-                "[yellow]No MC/DC conditions found — running for statement/branch coverage.[/]"
-            )
         static_prompt = self._static_fetcher(config.function_path)
         self.state.static_prompt = _dump_static_prompt(static_prompt)
         self.state.suite = session.suite_codec.dump_suite(suite)
@@ -85,7 +81,6 @@ class GenerationFlow(Flow[GenerationFlowState]):
                         function_path=config.function_path,
                         suite=suite,
                         remaining_batches=remaining,
-                        static_conditions_text=static_prompt.conditions_text,
                         static_context_text=(
                             static_prompt.context_text if prompt_config.preload_context else None
                         ),
@@ -192,7 +187,6 @@ class GenerationFlowRunner:
 
 def _dump_static_prompt(data: StaticPromptData) -> dict:
     return {
-        "conditions_text": data.conditions_text,
         "context_text": data.context_text,
         "source_text": data.source_text,
     }
@@ -200,7 +194,6 @@ def _dump_static_prompt(data: StaticPromptData) -> dict:
 
 def _load_static_prompt(data: dict) -> StaticPromptData:
     return StaticPromptData(
-        conditions_text=data.get("conditions_text", ""),
         context_text=data.get("context_text", ""),
         source_text=data.get("source_text", ""),
     )
@@ -213,7 +206,6 @@ def _config_from_dict(data: dict):
         function_path=data["function_path"],
         prompt_variant=data["prompt_variant"],
         max_batches=int(data["max_batches"]),
-        mcdc_target=float(data["mcdc_target"]),
         redundant_streak_limit=int(data["redundant_streak_limit"]),
         fail_streak_limit=int(data["fail_streak_limit"]),
         run_id=data["run_id"],

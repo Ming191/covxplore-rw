@@ -22,7 +22,6 @@ class GenerationConfig:
     function_path: str
     prompt_variant: str
     max_batches: int = field(default_factory=lambda: get_settings().max_batches)
-    mcdc_target: float = field(default_factory=lambda: get_settings().mcdc_target)
     redundant_streak_limit: int = field(
         default_factory=lambda: get_settings().redundant_streak_limit
     )
@@ -46,7 +45,6 @@ class GenerationConfig:
             "function_path": self.function_path,
             "prompt_variant": self.prompt_variant,
             "max_batches": self.max_batches,
-            "mcdc_target": self.mcdc_target,
             "redundant_streak_limit": self.redundant_streak_limit,
             "fail_streak_limit": self.fail_streak_limit,
         }
@@ -65,10 +63,6 @@ class GenerationResult:
     crew_completion_tokens: int | None = None
     tracing_url: str | None = None
     llm_interactions: list[dict] = field(default_factory=list)
-
-    @property
-    def final_mcdc_pct(self) -> float:
-        return round(self.suite.coverage.metrics(self.suite.tests).mcdc_pct, 4)
 
     @property
     def redundancy_rate(self) -> float:
@@ -126,13 +120,10 @@ class GenerationResult:
             "metrics": {
                 "statement_coverage_pct": round(metrics.statement_pct, 4),
                 "branch_coverage_pct": round(metrics.branch_pct, 4),
-                "mcdc_coverage_pct": self.final_mcdc_pct,
                 "covered_statements": self.covered_statements,
                 "total_statements": metrics.total_statements,
                 "covered_branches": self.covered_branches,
                 "total_branches": metrics.total_branches,
-                "covered_mcdc_pairs": metrics.covered_mcdc_pairs,
-                "total_mcdc_pairs": metrics.total_mcdc_pairs,
                 "redundancy_rate": self.redundancy_rate,
                 "total_input_tokens": self.total_input_tokens,
                 "total_output_tokens": self.total_output_tokens,
@@ -156,7 +147,6 @@ class GenerationResult:
         return {
             "test_name": t.test_name,
             "status": t.status,
-            "new_mcdc_pairs_covered": t.new_mcdc_pairs_covered,
             "is_redundant": t.is_redundant,
             "accepted_order": t.accepted_order,
             "elapsed_ms": round(t.elapsed_ms, 1),
@@ -167,8 +157,7 @@ class GenerationResult:
             "target_polarity": t.target_polarity,
             "target_reason": t.target_reason,
             "test_body": t.test_body,
-            "condition_trace": [entry.model_dump() for entry in t.condition_trace],
-            "mcdc_coverage": t.mcdc_coverage.model_dump(),
+            "new_structural_coverage": t.new_structural_coverage,
             "statement_coverage": t.statement_coverage.model_dump(),
             "branch_coverage": t.branch_coverage.model_dump(),
         }
@@ -184,8 +173,8 @@ def generate(config: GenerationConfig) -> GenerationResult:
 def _print_result_summary(r: GenerationResult) -> None:
     m = r.to_summary_dict()["metrics"]
     _console.print(
-        f"  MC/DC: [bold]{m['mcdc_coverage_pct'] * 100:.0f}%[/] "
-        f"({m['covered_mcdc_pairs']}/{m['total_mcdc_pairs']})  |  "
+        f"  Statement: [bold]{m['statement_coverage_pct'] * 100:.0f}%[/]  |  "
+        f"Branch: [bold]{m['branch_coverage_pct'] * 100:.0f}%[/]  |  "
         f"redundancy: {m['redundancy_rate'] * 100:.0f}%  |  "
         f"tokens: {m['total_tokens']:,}  |  "
         f"time: {m['elapsed_sec']:.1f}s  |  "

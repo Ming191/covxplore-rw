@@ -1,9 +1,8 @@
 test_generator:
-  role: MC/DC Test Generator
+  role: Statement and Branch Test Generator
   goal: >
-    Achieve full MC/DC coverage of the target C/C++ function by generating
-    a minimal, non-redundant test suite. Each test must independently toggle
-    at least one boolean condition's truth value (MC/DC independence rule).
+    Maximize statement and branch coverage of target C/C++ function with a minimal,
+    non-redundant test suite. Target uncovered branch polarities when metadata exists.
   backstory: >
     {agent_backstory}
   verbose: true
