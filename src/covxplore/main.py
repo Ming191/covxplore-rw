@@ -37,6 +37,15 @@ def run_generation() -> None:
         "--max-batches", type=int, default=None,
         help="Override max batches (default: Settings.max_batches).",
     )
+    parser.add_argument(
+        "--reasoning", dest="reasoning", action="store_true", default=None,
+        help="Enable the agent's reasoning/thinking step before each task "
+             "(prints 'Reasoning Started/Completed' panels; default: Settings.agent_reasoning).",
+    )
+    parser.add_argument(
+        "--no-reasoning", dest="reasoning", action="store_false",
+        help="Disable the agent's reasoning/thinking step, overriding Settings.agent_reasoning.",
+    )
     args = parser.parse_args()
 
     from covxplore.config import get_settings
@@ -49,6 +58,7 @@ def run_generation() -> None:
         function_path=args.path,
         prompt_variant=variant,
         max_batches=args.max_batches if args.max_batches is not None else cfg.max_batches,
+        reasoning=args.reasoning if args.reasoning is not None else cfg.agent_reasoning,
     )
 
     result = generate(exp_cfg)

@@ -28,6 +28,7 @@ class GenerationConfig:
     fail_streak_limit: int = field(
         default_factory=lambda: get_settings().fail_streak_limit
     )
+    reasoning: bool = field(default_factory=lambda: get_settings().agent_reasoning)
     run_id: str | None = None
 
     def __post_init__(self):
@@ -47,6 +48,7 @@ class GenerationConfig:
             "max_batches": self.max_batches,
             "redundant_streak_limit": self.redundant_streak_limit,
             "fail_streak_limit": self.fail_streak_limit,
+            "reasoning": self.reasoning,
         }
 
 

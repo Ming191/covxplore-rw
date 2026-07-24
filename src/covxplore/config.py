@@ -35,8 +35,24 @@ class Settings(BaseSettings):
 
     # Generation loop
     max_batches: int = 15
-    max_tokens: int = 4000
+    # DeepSeek V4 defaults to reasoning_effort="high" (thinking mode always on unless
+    # explicitly disabled), and the model's internal "thinking" tokens are billed against
+    # this same max_tokens budget as the final content/tool_calls. A low value here risks
+    # the response getting cut mid-thinking (finish_reason="length", content/tool_calls
+    # empty) before the model ever emits its actual answer — this hits doubly hard for
+    # CrewAI's own agent-level `reasoning` feature, since each reasoning attempt is itself
+    # an LLM call subject to the same truncation risk on top of the normal task calls.
+    max_tokens: int = 8000
     llm_temperature: float = 0.4
+
+    # When enabled, the test_generator agent reflects and drafts a plan before executing
+    # each task (CrewAI's built-in "reasoning" feature). This is the toggle that surfaces
+    # the agent's chain-of-thought as "Reasoning Started/Completed" panels in the console
+    # (requires verbose=True, already the case for the crew/agent below).
+    agent_reasoning: bool = False
+    # Max reasoning refinement attempts before proceeding regardless of readiness.
+    # None means "keep refining until the agent reports ready".
+    agent_max_reasoning_attempts: int | None = None
 
     min_suite_size: int = 1  # keep at least this many tests even if redundant
     redundant_streak_limit: int = 3  # early-stop after N consecutive redundant tests

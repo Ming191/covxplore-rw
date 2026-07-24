@@ -72,6 +72,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
                     agent_max_iter=3,
                     start_batch=start_batch,
                     run_context=session.run_context,
+                    reasoning=config.reasoning,
                 )
                 static_prompt = _load_static_prompt(self.state.static_prompt)
                 remaining = max(config.max_batches - suite.batch_count, 0)
@@ -208,5 +209,6 @@ def _config_from_dict(data: dict):
         max_batches=int(data["max_batches"]),
         redundant_streak_limit=int(data["redundant_streak_limit"]),
         fail_streak_limit=int(data["fail_streak_limit"]),
+        reasoning=bool(data.get("reasoning", False)),
         run_id=data["run_id"],
     )

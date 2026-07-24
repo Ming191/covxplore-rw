@@ -55,6 +55,8 @@ class TestGenerationCrew:
         agent_max_iter: int = 3,
         start_batch: int = 0,
         run_context: RunContext | None = None,
+        reasoning: bool | None = None,
+        max_reasoning_attempts: int | None = None,
     ):
         self._tools = tools
         self._run_context = run_context
@@ -63,6 +65,14 @@ class TestGenerationCrew:
         if agent_max_iter <= 0:
             raise ValueError("agent_max_iter must be > 0")
         self._agent_max_iter = agent_max_iter
+
+        cfg = get_settings()
+        self._reasoning = cfg.agent_reasoning if reasoning is None else reasoning
+        self._max_reasoning_attempts = (
+            cfg.agent_max_reasoning_attempts
+            if max_reasoning_attempts is None
+            else max_reasoning_attempts
+        )
 
         if isinstance(llm, LLM):
             self._llm = llm
@@ -76,6 +86,8 @@ class TestGenerationCrew:
             tools=self._tools,
             llm=self._llm,
             max_iter=self._agent_max_iter,
+            reasoning=self._reasoning,
+            max_reasoning_attempts=self._max_reasoning_attempts,
         )
 
     @task
@@ -109,6 +121,7 @@ def build_crew(
     agent_max_iter: int = 3,
     start_batch: int = 0,
     run_context: RunContext,
+    reasoning: bool | None = None,
 ) -> tuple["TestGenerationCrew", PromptBuilder]:
     builder = PromptBuilder(prompt_config)
 
@@ -126,5 +139,6 @@ def build_crew(
         agent_max_iter=agent_max_iter,
         start_batch=start_batch,
         run_context=run_context,
+        reasoning=reasoning,
     )
     return crew_inst, builder
