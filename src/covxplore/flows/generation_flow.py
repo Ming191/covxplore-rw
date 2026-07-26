@@ -11,6 +11,7 @@ from covxplore.crews.test_generation.crew import build_crew
 from covxplore.generation.prompt_context import StaticPromptData, fetch_static_prompt_data
 from covxplore.generation.runtime_session import GenerationFlowState, GenerationRuntimeSession, TestSuiteCodec
 from covxplore.generation.stop_reasons import StopReason
+from covxplore.generation.tokens import totals_from_usage_metrics
 from covxplore.observability import init_observability, trace_observation
 from covxplore.prompts.registry import get_variant
 from covxplore.tools.execute_testcase import HardStop
@@ -65,6 +66,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
             suite = session.active_suite()
             start_batch = suite.batch_count
             crew_inst = None
+            crew = None
             tracing_url = None
             try:
                 crew_inst, builder = self._crew_builder(
@@ -105,7 +107,8 @@ class GenerationFlow(Flow[GenerationFlowState]):
                     start_batch=start_batch,
                 ) as langfuse_url:
                     tracing_url = langfuse_url
-                    crew_inst.crew().kickoff(inputs=inputs)
+                    crew = crew_inst.crew()
+                    crew.kickoff(inputs=inputs)
             except HardStop as exc:
                 stop_reason = exc.reason  # type: ignore[assignment]
                 error_message = None
@@ -120,7 +123,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
                     self._console.print(f"[red]Error: {error_message}[/]")
                     traceback.print_exc()
             finally:
-                session.record_crew_run(crew_inst, tracing_url)
+                session.record_crew_run(crew or crew_inst, tracing_url)
                 suite = session.active_suite()
                 if stop_reason == "agent_done":
                     stop_reason = session.stop_policy.terminal_reason(suite)
@@ -177,7 +180,8 @@ class GenerationFlowRunner:
         else:
             state = flow.state
         suite = TestSuiteCodec().load_suite(state.suite)
-        tokens = state.token_ledger.get("chosen") or {}
+        flow_tokens = totals_from_usage_metrics(getattr(flow, "usage_metrics", None))
+        tokens = flow_tokens.to_dict() if flow_tokens.total > 0 else state.token_ledger.get("chosen") or {}
         static_prompt = _load_static_prompt(state.static_prompt)
         result = GenerationResult(
             config=config,

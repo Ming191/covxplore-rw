@@ -5,7 +5,11 @@ from typing import Sequence
 
 from covxplore.types.expected_path_step import ExpectedPathStep
 from covxplore.types.test_result import TestResult
+from covxplore.types.trace_summary import RuntimeValue, TargetFunctionConditionStep
 from covxplore.types.unvisited_branch import UnvisitedBranch
+
+_MAX_RUNTIME_OPERANDS = 4
+_MAX_RENDERED_VALUE_CHARS = 80
 
 
 @dataclass
@@ -163,7 +167,76 @@ def format_divergence(
         observed_desc = f"the predicted outcome ({step.polarity}) was not observed in this run"
 
     condition_text = f' ("{branch.condition}")' if branch and branch.condition else ""
+    runtime_desc = _format_runtime_operands(result, step, branch)
+    runtime_sentence = f" runtime operands: {runtime_desc}." if runtime_desc else ""
     return (
         f"Predicted path diverged at step {comparison.divergence_index + 1}/{len(path)} "
         f"(node {step.node_id}{condition_text}, predicted {step.polarity}): {prefix}{observed_desc}."
+        f"{runtime_sentence}"
     )
+
+
+def _format_runtime_operands(
+    result: TestResult,
+    step: ExpectedPathStep,
+    branch: UnvisitedBranch | None,
+) -> str | None:
+    steps = _matching_condition_steps(result, step, branch)
+    values = _latest_runtime_values(steps)
+    if not values:
+        return None
+    rendered = [_format_runtime_value(value) for value in values[:_MAX_RUNTIME_OPERANDS]]
+    return ", ".join(rendered)
+
+
+def _matching_condition_steps(
+    result: TestResult,
+    step: ExpectedPathStep,
+    branch: UnvisitedBranch | None,
+) -> list[TargetFunctionConditionStep]:
+    if not result.trace_summary:
+        return []
+    condition_steps = result.trace_summary.target_function_condition_steps
+    by_node = [s for s in condition_steps if s.node_id == step.node_id]
+    if by_node:
+        return by_node
+    if branch is None:
+        return []
+    by_offset = [
+        s
+        for s in condition_steps
+        if s.node_id is None
+        and s.start == branch.start_offset
+        and s.end == branch.end_offset
+        and (branch.line_in_function is None or s.line == branch.line_in_function)
+    ]
+    if by_offset:
+        return by_offset
+    return [
+        s
+        for s in condition_steps
+        if s.node_id is None
+        and branch.line_in_function is not None
+        and s.line == branch.line_in_function
+    ]
+
+
+def _latest_runtime_values(steps: list[TargetFunctionConditionStep]) -> list[RuntimeValue]:
+    values_by_expr: dict[str, RuntimeValue] = {}
+    for condition_step in steps[-2:]:
+        for value in condition_step.runtime_values:
+            values_by_expr.pop(value.expression, None)
+            values_by_expr[value.expression] = value
+    return list(values_by_expr.values())
+
+
+def _format_runtime_value(value: RuntimeValue) -> str:
+    rendered_value = _truncate(str(value.value))
+    type_suffix = f" ({value.type})" if value.type else ""
+    return f"{value.expression}={rendered_value}{type_suffix}"
+
+
+def _truncate(value: str) -> str:
+    if len(value) <= _MAX_RENDERED_VALUE_CHARS:
+        return value
+    return value[: _MAX_RENDERED_VALUE_CHARS - 1] + "…"

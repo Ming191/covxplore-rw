@@ -3,7 +3,7 @@
 from covxplore.types.unvisited_statement import UnvisitedStatement
 from covxplore.types.unvisited_branch import UnvisitedBranch
 from covxplore.types.coverage_detail import CoverageDetail
-from covxplore.types.trace_summary import TraceSummary
+from covxplore.types.trace_summary import RuntimeValue, TargetFunctionConditionStep, TraceSummary
 from covxplore.types.expected_path_step import ExpectedPathStep
 from covxplore.types.test_result import TestResult
 from covxplore.types.coverage_metrics import CoverageMetrics
@@ -19,6 +19,8 @@ __all__ = [
     "CoverageMetrics",
     "CoverageReadable",
     "ExpectedPathStep",
+    "RuntimeValue",
+    "TargetFunctionConditionStep",
     "TestResult",
     "TestSuite",
     "TraceSummary",

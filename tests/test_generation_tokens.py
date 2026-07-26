@@ -36,6 +36,19 @@ def test_token_totals_use_crew_usage_metrics():
     assert totals == TokenTotals(prompt=10, completion=20)
 
 
+def test_token_totals_calculate_usage_after_hard_stop_short_circuit():
+    class CrewAfterInterruptedKickoff:
+        usage_metrics = None
+
+        def calculate_usage_metrics(self):
+            self.usage_metrics = SimpleNamespace(prompt_tokens=11, completion_tokens=22)
+            return self.usage_metrics
+
+    totals = totals_from_crew(CrewAfterInterruptedKickoff())
+
+    assert totals == TokenTotals(prompt=11, completion=22)
+
+
 def test_token_totals_zero_when_crew_usage_metrics_zero():
     totals = totals_from_crew(_CrewInst(0, 0))
     assert totals == TokenTotals()

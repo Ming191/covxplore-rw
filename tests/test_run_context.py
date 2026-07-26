@@ -15,6 +15,45 @@ from covxplore.tools.execute_testcase import (
 )
 
 
+def test_parse_trace_summary_accepts_target_function_condition_steps_contract():
+    from covxplore.tools.execute_testcase import _parse_trace_summary
+
+    summary = _parse_trace_summary(
+        {
+            "rawStepCount": 3,
+            "targetFunctionStepCount": 2,
+            "conditionStepCount": 1,
+            "uniqueConditionOffsets": 1,
+            "visitedFunctions": ["foo"],
+            "targetFunctionConditionSteps": [
+                {
+                    "line": 4,
+                    "start": 8,
+                    "end": 15,
+                    "full": "if (a == b)",
+                    "sub": "a == b",
+                    "nodeId": 9,
+                    "branch": "FALSE",
+                    "mcdcRole": "decision",
+                    "mcdcLeaf": "a == b",
+                    "mcdcValue": False,
+                    "runtimeValues": [
+                        {"expression": "a", "value": "1", "type": "int"},
+                        {"expression": "b", "value": "2", "type": "int"},
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert summary is not None
+    assert summary.raw_step_count == 3
+    step = summary.target_function_condition_steps[0]
+    assert step.node_id == 9
+    assert step.runtime_values[1].expression == "b"
+    assert summary.model_dump(by_alias=True)["targetFunctionConditionSteps"][0]["nodeId"] == 9
+
+
 class TestRunContext:
     def test_reset_suite_creates_suite_by_run_id(self):
         ctx = RunContext()

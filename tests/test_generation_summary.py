@@ -1,5 +1,5 @@
 from covxplore.generator import GenerationConfig, GenerationResult, StopReason, generate
-from covxplore.types import TestResult, TestSuite
+from covxplore.types import TestResult, TestSuite, TraceSummary
 
 
 def test_generator_public_api_importable():
@@ -29,3 +29,23 @@ def test_summary_contract_minimal_keys_and_token_total_sum():
     assert summary["metrics"]["total_tokens"] == 24
     assert summary["tracing_url"] is None
     assert summary["llm_interactions"] == []
+
+
+def test_test_summary_preserves_trace_summary_runtime_values():
+    test = TestResult(test_name="t", test_body="", status="PASSED")
+    test.trace_summary = TraceSummary.model_validate(
+        {
+            "targetFunctionConditionSteps": [
+                {
+                    "nodeId": 4,
+                    "runtimeValues": [{"expression": "x", "value": "1", "type": "int"}],
+                }
+            ]
+        }
+    )
+
+    summary = GenerationResult._test_summary(test)
+
+    step = summary["trace_summary"]["targetFunctionConditionSteps"][0]
+    assert step["nodeId"] == 4
+    assert step["runtimeValues"] == [{"expression": "x", "value": "1", "type": "int"}]

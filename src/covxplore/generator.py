@@ -156,7 +156,7 @@ class GenerationResult:
 
     @staticmethod
     def _test_summary(t) -> dict:
-        return {
+        summary = {
             "test_name": t.test_name,
             "status": t.status,
             "is_redundant": t.is_redundant,
@@ -177,6 +177,9 @@ class GenerationResult:
             "statement_coverage": t.statement_coverage.model_dump(),
             "branch_coverage": t.branch_coverage.model_dump(),
         }
+        if t.trace_summary is not None:
+            summary["trace_summary"] = t.trace_summary.model_dump(by_alias=True, exclude_none=True)
+        return summary
 
 
 def generate(config: GenerationConfig) -> GenerationResult:

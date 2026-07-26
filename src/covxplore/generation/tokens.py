@@ -84,15 +84,29 @@ def _totals_from_dict(data: dict | None) -> TokenTotals:
 
 def totals_from_crew(crew_inst) -> TokenTotals:
     try:
-        metrics = crew_inst.crew().usage_metrics if crew_inst is not None else None
-        if not metrics:
+        if crew_inst is None:
             return TokenTotals()
-        return TokenTotals(
-            prompt=int(getattr(metrics, "prompt_tokens", 0) or 0),
-            completion=int(getattr(metrics, "completion_tokens", 0) or 0),
-        )
+        totals = totals_from_usage_metrics(getattr(crew_inst, "usage_metrics", None))
+        if totals.total > 0:
+            return totals
+        if hasattr(crew_inst, "calculate_usage_metrics"):
+            totals = totals_from_usage_metrics(crew_inst.calculate_usage_metrics())
+            if totals.total > 0:
+                return totals
+        if hasattr(crew_inst, "crew"):
+            return totals_from_usage_metrics(crew_inst.crew().usage_metrics)
+        return TokenTotals()
     except Exception:
         return TokenTotals()
+
+
+def totals_from_usage_metrics(metrics) -> TokenTotals:
+    if not metrics:
+        return TokenTotals()
+    return TokenTotals(
+        prompt=int(getattr(metrics, "prompt_tokens", 0) or 0),
+        completion=int(getattr(metrics, "completion_tokens", 0) or 0),
+    )
 
 
 def reconcile_suite_tokens(suite, totals: TokenTotals) -> None:

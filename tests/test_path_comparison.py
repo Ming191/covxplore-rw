@@ -5,7 +5,8 @@ from covxplore.coverage.path_comparison import (
     is_proper_path_prefix,
     path_signature,
 )
-from covxplore.types import ExpectedPathStep, TestResult, UnvisitedBranch
+from covxplore.types import ExpectedPathStep, TestResult, TraceSummary, UnvisitedBranch
+from covxplore.types.trace_summary import TargetFunctionConditionStep
 
 
 def _result(*, expected_path=None, target_node_id=None, target_polarity=None, branches=None):
@@ -122,3 +123,121 @@ def test_is_proper_path_prefix():
     assert is_proper_path_prefix(long, short) is False
     assert is_proper_path_prefix(short, other) is False
     assert is_proper_path_prefix(path_signature(short), path_signature(long)) is True
+
+
+def test_format_divergence_includes_latest_runtime_operands_by_node_id():
+    result = _result(
+        expected_path=[ExpectedPathStep(node_id=2, polarity="FALSE")],
+        branches=[UnvisitedBranch(node_id=2, condition="p->ch == exitCh", true_visited=True, false_visited=False)],
+    )
+    result.trace_summary = TraceSummary.model_validate(
+        {"targetFunctionConditionSteps": [
+            {
+                "line": 10,
+                "start": 5,
+                "end": 20,
+                "nodeId": 2,
+                "branch": "TRUE",
+                "runtimeValues": [
+                    {"expression": "p->ch", "value": "x", "type": "unsigned char"},
+                ],
+            },
+            {
+                "line": 10,
+                "start": 5,
+                "end": 20,
+                "nodeId": 2,
+                "branch": "TRUE",
+                "runtimeValues": [
+                    {"expression": "p->ch", "value": '","', "type": "unsigned char"},
+                    {"expression": "exitCh", "value": '"}"', "type": "char"},
+                ],
+            },
+        ]}
+    )
+
+    text = format_divergence(result)
+
+    assert text is not None
+    assert 'runtime operands: p->ch="," (unsigned char), exitCh="}" (char)' in text
+
+
+def test_format_divergence_omits_runtime_operands_without_values():
+    result = _result(
+        expected_path=[ExpectedPathStep(node_id=2, polarity="FALSE")],
+        branches=[UnvisitedBranch(node_id=2, condition="x", true_visited=True, false_visited=False)],
+    )
+    result.trace_summary = TraceSummary.model_validate(
+        {"targetFunctionConditionSteps": [{"line": 10, "start": 5, "end": 20, "nodeId": 2}]}
+    )
+
+    text = format_divergence(result)
+
+    assert text is not None
+    assert "runtime operands:" not in text
+
+
+def test_format_divergence_matches_runtime_operands_by_offsets_without_node_id():
+    result = _result(
+        expected_path=[ExpectedPathStep(node_id=7, polarity="TRUE")],
+        branches=[
+            UnvisitedBranch(
+                node_id=7,
+                condition="a == b",
+                true_visited=False,
+                false_visited=True,
+                line_in_function=3,
+                start_offset=11,
+                end_offset=17,
+            )
+        ],
+    )
+    result.trace_summary = TraceSummary.model_validate(
+        {"targetFunctionConditionSteps": [
+            {
+                "line": 3,
+                "start": 11,
+                "end": 17,
+                "runtimeValues": [{"expression": "a", "value": "1", "type": "int"}],
+            }
+        ]}
+    )
+
+    text = format_divergence(result)
+
+    assert text is not None
+    assert "runtime operands: a=1 (int)" in text
+
+
+def test_format_divergence_caps_and_truncates_runtime_operands():
+    result = _result(
+        expected_path=[ExpectedPathStep(node_id=2, polarity="FALSE")],
+        branches=[UnvisitedBranch(node_id=2, condition="x", true_visited=True, false_visited=False)],
+    )
+    result.trace_summary = TraceSummary.model_validate(
+        {
+            "targetFunctionConditionSteps": [
+                TargetFunctionConditionStep.model_validate(
+                    {
+                        "nodeId": 2,
+                        "runtimeValues": [
+                            {"expression": "a", "value": "x" * 100, "type": "char[]"},
+                            {"expression": "b", "value": "2", "type": "int"},
+                            {"expression": "c", "value": "3", "type": "int"},
+                            {"expression": "d", "value": "4", "type": "int"},
+                            {"expression": "e", "value": "5", "type": "int"},
+                        ],
+                    }
+                )
+            ]
+        }
+    )
+
+    text = format_divergence(result)
+
+    assert text is not None
+    assert "a=" + "x" * 80 not in text
+    assert "a=" + "x" * 79 + "…" in text
+    assert "… (char[])" in text
+    assert "d=4 (int)" in text
+    assert "e=5 (int)" not in text
