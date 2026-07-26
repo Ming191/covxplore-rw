@@ -74,3 +74,53 @@ def test_gap_analyzer_uses_structural_gap_input():
     gap = GapAnalyzer().analyze(state.gap_input([result], batch_count=1))
     assert "MC/DC" not in gap.text
     assert "suite" not in str(inspect.signature(GapAnalyzer.analyze))
+
+
+def test_is_branch_satisfied_false_for_unknown_node_id():
+    """Phantom nodeIds (e.g. line mistaken for nodeId) must not count as covered."""
+    state = CoverageState()
+    seed = _result(
+        "seed",
+        branch=(1, 2),
+        branches=[
+            UnvisitedBranch(
+                node_id=65,
+                condition="c == 0",
+                true_visited=True,
+                false_visited=False,
+                line_in_function=11,
+            ),
+        ],
+    )
+    state.add_result(seed, prior_results=[])
+    assert state.is_branch_satisfied(65, True) is True
+    assert state.is_branch_satisfied(65, False) is False
+    # line_in_function 11 is not a CFG nodeId
+    assert state.is_branch_satisfied(11, False) is False
+
+
+def test_gap_text_tags_node_id_not_line():
+    state = CoverageState()
+    seed = _result(
+        "seed",
+        stmt=(1, 2),
+        branch=(1, 2),
+        statements=[
+            UnvisitedStatement(node_id=14, statement="indent++;", line_in_function=14),
+        ],
+        branches=[
+            UnvisitedBranch(
+                node_id=65,
+                condition="c == 0",
+                true_visited=True,
+                false_visited=False,
+                line_in_function=11,
+            ),
+        ],
+    )
+    state.add_result(seed, prior_results=[])
+    gap = GapAnalyzer().analyze(state.gap_input([seed], batch_count=1))
+    assert "nodeId=65" in gap.text
+    assert "nodeId=14" in gap.text
+    assert "line+11" not in gap.text
+    assert "line+14" not in gap.text

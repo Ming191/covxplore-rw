@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from covxplore.coverage._helpers import format_pct, line_sort_key, line_tag
+from covxplore.coverage._helpers import format_pct, node_sort_key, node_tag
 from covxplore.prompts.catalog import catalog_text, catalog_value
 from covxplore.types.unvisited_branch import UnvisitedBranch
 from covxplore.types.unvisited_statement import UnvisitedStatement
@@ -24,26 +24,26 @@ class CoverageRenderer:
     def statement_section(
         self, stmt_pct: float, statements: list[UnvisitedStatement]
     ) -> str:
-        items = sorted(statements, key=lambda s: line_sort_key(s.line_in_function))
+        items = sorted(statements, key=lambda s: node_sort_key(s.node_id))
         return self._render_detail_section(
             label="Statement",
             pct=stmt_pct,
             items=items,
             max_lines=int(catalog_value("coverage", "max_statement_lines")),
-            item_format=lambda s: f"[{line_tag(s.line_in_function)}] {s.statement!r}",
+            item_format=lambda s: f"[{node_tag(s.node_id)}] {s.statement!r}",
         )
 
     def branch_section(
         self, branch_pct: float, branches: list[UnvisitedBranch]
     ) -> str:
-        items = sorted(branches, key=lambda b: line_sort_key(b.line_in_function))
+        items = sorted(branches, key=lambda b: node_sort_key(b.node_id))
         return self._render_detail_section(
             label="Branch",
             pct=branch_pct,
             items=items,
             max_lines=int(catalog_value("coverage", "max_branch_lines")),
             item_format=lambda b: (
-                f"[{line_tag(b.line_in_function)}] "
+                f"[{node_tag(b.node_id)}] "
                 f"{b.condition!r} — missing: {', '.join(_missing_sides(b))}"
             ),
         )

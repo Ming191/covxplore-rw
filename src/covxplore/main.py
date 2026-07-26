@@ -145,6 +145,11 @@ def run_parallel() -> None:
         help="Run leave-one-out preset: full, full_shots, and all variants starting with 'no_'.",
     )
     parser.add_argument(
+        "--q1-ablation",
+        action="store_true",
+        help="Run Q1 mechanism ablation preset (ours + wo_* / gap_ids_only).",
+    )
+    parser.add_argument(
         "--repeat", "-r", type=int, default=None,
         help="Repetitions per variant. Defaults to Settings.ablation_repeat.",
     )
@@ -155,12 +160,18 @@ def run_parallel() -> None:
     args = parser.parse_args()
 
     from covxplore.pipeline import ParallelPipeline
-    from covxplore.prompts.registry import get_leave_one_out_variants
+    from covxplore.prompts.registry import get_leave_one_out_variants, get_q1_ablation_variants
 
-    if args.leave_one_out and args.variants:
-        parser.error("Use either --variants or --leave-one-out, not both.")
+    mode_flags = sum(bool(x) for x in (args.leave_one_out, args.q1_ablation, args.variants))
+    if mode_flags > 1:
+        parser.error("Use only one of --variants, --leave-one-out, or --q1-ablation.")
 
-    variants = get_leave_one_out_variants() if args.leave_one_out else args.variants
+    if args.q1_ablation:
+        variants = get_q1_ablation_variants()
+    elif args.leave_one_out:
+        variants = get_leave_one_out_variants()
+    else:
+        variants = args.variants
 
     pipeline = ParallelPipeline(
         paths_file=Path(args.paths_file),

@@ -86,6 +86,29 @@ class CoverageState:
             batch_count=batch_count,
         )
 
+    def is_branch_satisfied(self, node_id: int, polarity: bool) -> bool | None:
+        """Whether ``node_id``'s ``polarity`` side is already covered by the suite so far.
+
+        Returns ``None`` when branch coverage hasn't been established yet (no accepted result
+        has carried node-id-bearing ``unvisited_branches``), so callers can treat "unknown" as
+        "not confirmed covered" rather than silently skipping a possibly-still-needed candidate.
+
+        Returns ``False`` for a ``node_id`` never seen in suite coverage data (e.g. agent
+        confused ``line_in_function`` with CFG ``nodeId``) — never treat phantom IDs as covered.
+        """
+        if self._cumulative_uncovered_branch_keys is None:
+            return None
+        if (node_id, polarity) in self._cumulative_uncovered_branch_keys:
+            return False
+        known = (
+            node_id in self._branch_node_info
+            or (node_id, True) in self._cumulative_uncovered_branch_keys
+            or (node_id, False) in self._cumulative_uncovered_branch_keys
+        )
+        if not known:
+            return False
+        return True
+
     def structural_gain(self, result: TestResult) -> int:
         """Count newly covered statements and branch sides.
 

@@ -2,6 +2,8 @@
 
 import pytest
 
+_EP = [{"node_id": 1, "polarity": "TRUE"}]
+
 from covxplore.api_client import AkaUTError, ExecuteResult
 from covxplore.types import TestResult, TestSuite
 from covxplore.status import TestStatus
@@ -117,7 +119,9 @@ class TestExecuteTestcaseToolRobustResponses:
         ctx = RunContext()
         ctx.reset_suite("/x.cpp::f()", "run-1")
 
-        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            test_body="f();", test_name="t1", expected_path=_EP
+        )
 
         assert "Stmt: 0/0 (0%)" in output
         assert "Branch: 0/0 (0%)" in output
@@ -137,7 +141,9 @@ class TestExecuteTestcaseToolRobustResponses:
         ctx = RunContext()
         ctx.reset_suite("/x.cpp::f()", "run-1")
 
-        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            test_body="f();", test_name="t1", expected_path=_EP
+        )
 
         assert "===  t1 | PASSED" in output
 
@@ -153,7 +159,9 @@ class TestExecuteTestcaseToolRobustResponses:
         ctx = RunContext()
         ctx.reset_suite("/x.cpp::f()", "run-1")
 
-        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            test_body="f();", test_name="t1", expected_path=_EP
+        )
 
         assert "===  t1 | PASSED" in output
 
@@ -163,7 +171,9 @@ class TestExecuteTestcaseToolRobustResponses:
         _FakeExecutor.response = None
         _FakeExecutor.error = AkaUTError("POST http://localhost/api/testcase/execute failed: boom")
 
-        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            test_body="f();", test_name="t1", expected_path=_EP
+        )
 
         assert "[EXECUTE_ERROR]" in output
         assert "COMPILE_ERROR" not in output
@@ -176,7 +186,9 @@ class TestExecuteTestcaseToolRobustResponses:
         _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
         _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            test_body="f();", test_name="t1", expected_path=_EP
+        )
 
         assert "Suite best" in output
         assert suite_a.tests == []
@@ -193,6 +205,7 @@ class TestExecuteTestcaseToolRobustResponses:
         output = ExecuteTestcaseTool(run_context=ctx, executor=executor)._run(
             test_body="f();",
             test_name="t1",
+            expected_path=_EP,
         )
 
         assert "===  t1 | PASSED" in output
@@ -205,6 +218,7 @@ class TestExecuteTestcaseToolRobustResponses:
         output = ExecuteTestcaseTool(run_context=RunContext(), executor=executor)._run(
             test_body="f();",
             test_name="t1",
+            expected_path=_EP,
         )
 
         assert "could not resolve target function path" in output
@@ -217,7 +231,9 @@ class TestExecuteTestcaseToolRobustResponses:
         _FakeExecutor.response = ExecuteResult(raw={"testName": "t1", "status": "PASSED"})
         _FakeExecutor.error = None
 
-        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run("f();", "t1")
+        output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
+            test_body="f();", test_name="t1", expected_path=_EP
+        )
 
         assert "could not resolve target function path" in output
         assert suite.tests == []
@@ -229,8 +245,9 @@ class TestExecuteTestcaseToolRobustResponses:
         executor.calls = []
 
         output = ExecuteTestcaseTool(run_context=ctx, executor=executor)._run(
-            "```cpp\nf();\n```",
-            "bad",
+            test_body="```cpp\nf();\n```",
+            test_name="bad",
+            expected_path=_EP,
         )
 
         assert "[CONTRACT_ERROR]" in output
@@ -246,11 +263,12 @@ class TestExecuteTestcaseToolRobustResponses:
         _FakeExecutor.error = None
 
         output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
-            "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
-            "t1",
+            test_body="int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
+            test_name="t1",
             target_node_id=2,
             target_polarity="TRUE",
             target_reason="cover node 2 true",
+            expected_path=[{"node_id": 2, "polarity": "TRUE"}],
         )
 
         assert "===  t1 | PASSED" in output
@@ -261,9 +279,10 @@ class TestExecuteTestcaseToolRobustResponses:
         executor.calls = []
 
         output = ExecuteTestcaseTool(run_context=RunContext(), executor=executor)._run(
-            "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
-            "t1",
+            test_body="int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
+            test_name="t1",
             target_node_id=2,
+            expected_path=[{"node_id": 2, "polarity": "TRUE"}],
         )
 
         assert "[ACTION_ERROR]" in output
@@ -277,10 +296,11 @@ class TestExecuteTestcaseToolRobustResponses:
         _FakeExecutor.error = None
 
         output = ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
-            "int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
-            "t1",
+            test_body="int x = 1;\nAKA_ACTUAL_OUTPUT = x;",
+            test_name="t1",
             target_node_id=2,
             target_polarity="FALSE",
+            expected_path=[{"node_id": 2, "polarity": "FALSE"}],
         )
 
         assert "Action warnings:" in output
@@ -302,7 +322,7 @@ class TestExecuteTestcaseToolRobustResponses:
 
         with pytest.raises(HardStop) as exc:
             ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
-                "f();", "t1"
+                test_body="f();", test_name="t1", expected_path=_EP
             )
 
         assert exc.value.reason == "coverage_target"
@@ -335,7 +355,7 @@ class TestExecuteTestcaseToolRobustResponses:
 
         with pytest.raises(HardStop) as exc:
             ExecuteTestcaseTool(run_context=ctx, executor=_FakeExecutor())._run(
-                "f();", "t1"
+                test_body="f();", test_name="t1", expected_path=_EP
             )
 
         assert exc.value.reason == "redundant_streak"
@@ -385,9 +405,9 @@ class TestExecuteTestcaseBatchTool:
 
         output = ExecuteTestcaseBatchTool(run_context=ctx, executor=executor)._run(
             [
-                {"test_body": "f(1);", "test_name": "first"},
-                {"test_body": "f(1);", "test_name": "dupe"},
-                {"test_body": "```cpp\nf();\n```", "test_name": "bad"},
+                {"test_body": "f(1);", "test_name": "first", "expected_path": _EP},
+                {"test_body": "f(1);", "test_name": "dupe", "expected_path": [{"node_id": 2, "polarity": "TRUE"}]},
+                {"test_body": "```cpp\nf();\n```", "test_name": "bad", "expected_path": [{"node_id": 3, "polarity": "TRUE"}]},
             ]
         )
 
@@ -415,8 +435,8 @@ class TestExecuteTestcaseBatchTool:
 
         output = ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())._run(
             [
-                {"test_body": "bad1();", "test_name": "bad1"},
-                {"test_body": "bad2();", "test_name": "bad2"},
+                {"test_body": "bad1();", "test_name": "bad1", "expected_path": _EP},
+                {"test_body": "bad2();", "test_name": "bad2", "expected_path": [{"node_id": 2, "polarity": "TRUE"}]},
             ]
         )
 
@@ -435,7 +455,7 @@ class TestExecuteTestcaseBatchTool:
         suite = ctx.reset_suite("/x.cpp::f()", "run-1")
 
         output = ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())._run(
-            [{"test_body": "bad();", "test_name": "bad"}]
+            [{"test_body": "bad();", "test_name": "bad", "expected_path": _EP}]
         )
 
         assert suite.tests[0].status == TestStatus.COMPILE_ERROR.value
@@ -451,7 +471,7 @@ class TestExecuteTestcaseBatchTool:
         suite = ctx.reset_suite("/x.cpp::f()", "run-1")
 
         output = ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())._run(
-            [{"test_body": "maybe();", "test_name": "mystery"}]
+            [{"test_body": "maybe();", "test_name": "mystery", "expected_path": _EP}]
         )
 
         assert suite.tests[0].status == TestStatus.UNKNOWN.value
@@ -477,9 +497,9 @@ class TestExecuteTestcaseBatchTool:
         suite = ctx.reset_suite("/x.cpp::f()", "run-1")
         tool = ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())
         batch = [
-            {"test_body": "bad1();", "test_name": "bad1"},
-            {"test_body": "bad2();", "test_name": "bad2"},
-            {"test_body": "bad3();", "test_name": "bad3"},
+            {"test_body": "bad1();", "test_name": "bad1", "expected_path": _EP},
+            {"test_body": "bad2();", "test_name": "bad2", "expected_path": [{"node_id": 2, "polarity": "TRUE"}]},
+            {"test_body": "bad3();", "test_name": "bad3", "expected_path": [{"node_id": 3, "polarity": "TRUE"}]},
         ]
 
         assert "Accepted:" in tool._run(batch)
@@ -515,7 +535,7 @@ class TestExecuteTestcaseBatchTool:
 
         with pytest.raises(HardStop) as exc:
             ExecuteTestcaseBatchTool(run_context=ctx, executor=Executor())._run(
-                [{"test_body": "f();", "test_name": "dupe"}]
+                [{"test_body": "f();", "test_name": "dupe", "expected_path": _EP}]
             )
 
         assert exc.value.reason == "redundant_streak"
@@ -524,7 +544,7 @@ class TestExecuteTestcaseBatchTool:
 
     def test_batch_arun_requires_active_suite(self):
         output = ExecuteTestcaseBatchTool(run_context=RunContext())._run(
-            [{"test_body": "f();", "test_name": "t1"}]
+            [{"test_body": "f();", "test_name": "t1", "expected_path": _EP}]
         )
 
         assert "could not resolve target function path" in output

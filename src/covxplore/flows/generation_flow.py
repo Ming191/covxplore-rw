@@ -75,6 +75,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
                     reasoning=config.reasoning,
                 )
                 static_prompt = _load_static_prompt(self.state.static_prompt)
+                session.run_context.set_branch_catalog_ids(static_prompt.branch_catalog_ids)
                 remaining = max(config.max_batches - suite.batch_count, 0)
                 inputs = {
                     "agent_backstory": builder.system_prompt(),
@@ -86,8 +87,16 @@ class GenerationFlow(Flow[GenerationFlowState]):
                             static_prompt.context_text if prompt_config.preload_context else None
                         ),
                         static_source_text=static_prompt.source_text,
+                        static_branch_catalog_text=(
+                            static_prompt.branch_catalog_text or None
+                            if prompt_config.preload_branch_catalog
+                            else None
+                        ),
                     ),
                 }
+                session.run_context.path_feedback = prompt_config.path_feedback
+                session.run_context.include_exec_detail = prompt_config.include_exec_detail
+                session.run_context.max_batch_candidates = prompt_config.max_batch_candidates
                 with trace_observation(
                     "covxplore.generate.session",
                     run_id=config.run_id,
@@ -169,6 +178,7 @@ class GenerationFlowRunner:
             state = flow.state
         suite = TestSuiteCodec().load_suite(state.suite)
         tokens = state.token_ledger.get("chosen") or {}
+        static_prompt = _load_static_prompt(state.static_prompt)
         result = GenerationResult(
             config=config,
             suite=suite,
@@ -178,6 +188,7 @@ class GenerationFlowRunner:
             crew_completion_tokens=tokens.get("completion"),
             tracing_url=state.trace_urls[-1] if state.trace_urls else None,
             llm_interactions=state.llm_interactions,
+            branch_catalog_ids=set(static_prompt.branch_catalog_ids),
         )
         _print_result_summary(result)
         return result
@@ -190,6 +201,8 @@ def _dump_static_prompt(data: StaticPromptData) -> dict:
     return {
         "context_text": data.context_text,
         "source_text": data.source_text,
+        "branch_catalog_text": data.branch_catalog_text,
+        "branch_catalog_ids": list(data.branch_catalog_ids),
     }
 
 
@@ -197,6 +210,8 @@ def _load_static_prompt(data: dict) -> StaticPromptData:
     return StaticPromptData(
         context_text=data.get("context_text", ""),
         source_text=data.get("source_text", ""),
+        branch_catalog_text=data.get("branch_catalog_text", ""),
+        branch_catalog_ids=[int(node_id) for node_id in data.get("branch_catalog_ids") or []],
     )
 
 

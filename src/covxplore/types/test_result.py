@@ -6,6 +6,7 @@ from covxplore.types.coverage_detail import CoverageDetail
 from covxplore.types.unvisited_statement import UnvisitedStatement
 from covxplore.types.unvisited_branch import UnvisitedBranch
 from covxplore.types.trace_summary import TraceSummary
+from covxplore.types.expected_path_step import ExpectedPathStep
 
 
 class TestResult(BaseModel):
@@ -23,6 +24,10 @@ class TestResult(BaseModel):
     target_node_id: int | None = None
     target_polarity: str | None = None
     target_reason: str | None = None
+    # Predicted branch-outcome trace from function entry to the target (see
+    # ExpectedPathStep); compared against unvisited_branches after execution to
+    # detect *where* the LLM's prediction diverged from the real runtime path.
+    expected_path: list[ExpectedPathStep] = Field(default_factory=list)
 
     new_structural_coverage: int = 0
     is_redundant: bool = False

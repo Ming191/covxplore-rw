@@ -25,7 +25,7 @@ def test_prompt_catalog_contains_all_sections_and_templates():
         "few_shot_examples",
         "output_format",
     }
-    assert set(catalog["workflows"]) == {"unlimited_batch", "no_search", "search"}
+    assert set(catalog["workflows"]) == {"unlimited_batch", "no_search", "no_path", "search"}
     assert set(catalog["coverage"]) == {
         "no_tests",
         "compile_error",
@@ -37,7 +37,7 @@ def test_prompt_catalog_contains_all_sections_and_templates():
         "max_statement_lines",
         "max_branch_lines",
     }
-    assert set(catalog["task"]) == {"description", "context", "source"}
+    assert set(catalog["task"]) == {"description", "context", "source", "branch_catalog"}
 
 
 def test_legacy_prompt_text_files_are_removed():

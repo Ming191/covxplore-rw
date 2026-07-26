@@ -28,6 +28,12 @@ class PromptConfig:
     search_tools: bool = True
     preload_context: bool = True
     unlimited_batch: bool = False
+    require_expected_path: bool = True  # False → no-path ablation (schema + prompts soft)
+    # Q1 mechanism ablations (orthogonal to S1–S6 prose toggles)
+    preload_branch_catalog: bool = True  # False → gap-IDs only (path still allowed)
+    path_feedback: bool = True  # False → still require path, hide PATH DIVERGENCE
+    include_exec_detail: bool = True  # False → hide compile/runtime logs in batch feedback
+    max_batch_candidates: int = 5  # 1 → w/o batching diversity
 
     def enabled_sections(self) -> list[str]:
         """Return ordered list of section names that are enabled."""

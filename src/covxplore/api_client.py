@@ -41,6 +41,22 @@ class SourceResult:
 
 
 @dataclass
+class ConditionInfo:
+    node_id: int | None
+    condition: str
+    line_in_function: int | None = None
+    start_offset: int | None = None
+    end_offset: int | None = None
+
+
+@dataclass
+class NodeConditionsResult:
+    absolute_path: str
+    total_conditions: int
+    conditions: list[ConditionInfo]
+
+
+@dataclass
 class ExecuteResult:
     raw: dict[str, Any]
 
@@ -139,6 +155,36 @@ class AkaUTClient:
         return SourceResult(
             source=data["source"],
             value=data.get("value"),
+        )
+
+    def get_node_conditions(
+        self,
+        absolute_path: str,
+        *,
+        coverage_type: str = "BRANCH",
+    ) -> NodeConditionsResult:
+        """Static CFG condition catalog. Prefer ``BRANCH`` for expected_path nodeIds."""
+        absolute_path = absolute_path.replace("\\", "/")
+        data = self._get(
+            "/api/node/conditions",
+            {"absolutePath": absolute_path, "coverageType": coverage_type},
+        )
+        if isinstance(data, dict) and "error" in data:
+            raise AkaUTError(data["error"])
+        conditions = [
+            ConditionInfo(
+                node_id=item.get("nodeId"),
+                condition=item.get("condition") or "",
+                line_in_function=item.get("lineInFunction"),
+                start_offset=item.get("startOffset"),
+                end_offset=item.get("endOffset"),
+            )
+            for item in (data.get("conditions") or [])
+        ]
+        return NodeConditionsResult(
+            absolute_path=data.get("absolutePath") or absolute_path,
+            total_conditions=int(data.get("totalConditions") or len(conditions)),
+            conditions=conditions,
         )
 
     def search_nodes(

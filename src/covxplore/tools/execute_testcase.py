@@ -14,6 +14,8 @@ from covxplore.agents.schemas import (
     GenerateTestAction,
     GenerateTestBatchAction,
     GenerateTestBatchAnyAction,
+    GenerateTestBatchOptionalPathAction,
+    GenerateTestBatchSingleAction,
 )
 from covxplore.api_client import AkaUTError, ExecuteResult
 from covxplore.config import get_settings
@@ -21,6 +23,7 @@ from covxplore.driver.contract import ContractViolation
 from covxplore.driver import AkaUTExecutor, DriverContractValidator, TestCaseExecutor
 from covxplore.types import (
     CoverageDetail,
+    ExpectedPathStep,
     TestResult,
     TestSuite,
     TraceSummary,
@@ -28,9 +31,14 @@ from covxplore.types import (
     UnvisitedStatement,
 )
 from covxplore.coverage.gap_analyzer import GapAnalyzer
-from covxplore.generation.batch import merge_batch_results
+from covxplore.coverage.path_comparison import (
+    compare_expected_path,
+    effective_expected_path,
+    format_divergence,
+)
+from covxplore.generation.batch import filter_preflight_candidates, merge_batch_results
 from covxplore.generation.stop_reasons import StopPolicy
-from covxplore.status import TestStatus, is_failure_status, is_hard_fail
+from covxplore.status import TestStatus, is_hard_fail
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +70,10 @@ class RunContext:
 
     _suites: dict[str, TestSuite] = field(default_factory=dict)
     _active_run_id: str | None = None
+    branch_catalog_ids: set[int] = field(default_factory=set)
+    path_feedback: bool = True
+    include_exec_detail: bool = True
+    max_batch_candidates: int = 5
 
     def get_suite(self, run_id: str) -> TestSuite | None:
         return self._suites.get(run_id)
@@ -82,6 +94,8 @@ class RunContext:
         if self._active_run_id == run_id:
             self._active_run_id = None
 
+    def set_branch_catalog_ids(self, node_ids: set[int] | list[int] | None) -> None:
+        self.branch_catalog_ids = {int(node_id) for node_id in (node_ids or [])}
 
 class ExecuteTestcaseTool(BaseTool):
     name: str = "execute_testcase"
@@ -119,6 +133,7 @@ class ExecuteTestcaseTool(BaseTool):
         target_node_id: int | None = None,
         target_polarity: str | None = None,
         target_reason: str | None = None,
+        expected_path: list[dict | ExpectedPathStep] | None = None,
     ) -> str:
         cfg = get_settings()
         suite = self._run_context.active_suite()
@@ -131,6 +146,7 @@ class ExecuteTestcaseTool(BaseTool):
                 "target_node_id": target_node_id,
                 "target_polarity": target_polarity,
                 "target_reason": target_reason,
+                "expected_path": expected_path or [],
             }
         )
         if not action_validation.ok:
@@ -143,21 +159,23 @@ class ExecuteTestcaseTool(BaseTool):
                 "Start a generation run before calling the tool."
             )
         assert test_body is not None
+        action = GenerateTestAction.model_validate(
+            {
+                "test_body": test_body,
+                "test_name": test_name,
+                "target_node_id": target_node_id,
+                "target_polarity": target_polarity,
+                "target_reason": target_reason,
+                "expected_path": expected_path or [],
+            }
+        )
 
         violations = self._validator.validate(test_body)
         errors = [violation for violation in violations if violation.severity == "ERROR"]
         if errors:
             elapsed = 0.0
-            failed = TestResult(
-                test_name=test_name or "contract_error",
-                test_body=test_body,
-                status=TestStatus.COMPILE_ERROR.value,
-                execute_log=_format_contract_violations(violations),
-                elapsed_ms=elapsed,
-                target_node_id=target_node_id,
-                target_polarity=target_polarity,
-                target_reason=target_reason,
-            )
+            failed = _contract_error_result(action, violations)
+            failed.elapsed_ms = elapsed
             if suite:
                 suite.add_result(failed, cfg.min_suite_size)
                 suite.record_batch(True)
@@ -181,9 +199,10 @@ class ExecuteTestcaseTool(BaseTool):
                     status=TestStatus.COMPILE_ERROR.value,
                     execute_log=str(exc),
                     elapsed_ms=elapsed,
-                    target_node_id=target_node_id,
-                    target_polarity=target_polarity,
-                    target_reason=target_reason,
+                    target_node_id=action.target_node_id,
+                    target_polarity=action.target_polarity,
+                    target_reason=action.target_reason,
+                    expected_path=list(action.expected_path),
                 )
                 if suite:
                     suite.add_result(failed, cfg.min_suite_size)
@@ -206,9 +225,10 @@ class ExecuteTestcaseTool(BaseTool):
             raw,
             test_body=test_body,
             elapsed_ms=elapsed,
-            target_node_id=target_node_id,
-            target_polarity=target_polarity,
-            target_reason=target_reason,
+            target_node_id=action.target_node_id,
+            target_polarity=action.target_polarity,
+            target_reason=action.target_reason,
+            expected_path=list(action.expected_path),
         )
 
         if suite:
@@ -223,8 +243,10 @@ class ExecuteTestcaseBatchTool(BaseTool):
     name: str = "execute_testcase_batch"
     description: str = (
         "Compile and execute a batch of 3-5 C++ test driver bodies for the active target function. "
-        "Prefer distinct structural targets. Returns accepted tests, redundant rejections, "
-        "suite coverage, and remaining gap guidance."
+        "Every candidate MUST include a non-empty expected_path (ordered TRUE/FALSE branch outcomes "
+        "from function entry to the target). Prefer distinct structural targets. "
+        "Returns accepted tests, redundant rejections, path-divergence diagnostics, suite coverage, "
+        "and remaining gap guidance."
     )
     args_schema: type[BaseModel] = GenerateTestBatchAction
     batch_schema: ClassVar[type[BaseModel]] = GenerateTestBatchAction
@@ -265,27 +287,37 @@ class ExecuteTestcaseBatchTool(BaseTool):
             )
 
         results: list[TestResult] = []
-        executable: list[GenerateTestAction] = []
+        contract_ok: list[GenerateTestAction] = []
         for candidate in batch.candidates:
             violations = self._validator.validate(candidate.test_body)
             errors = [violation for violation in violations if violation.severity == "ERROR"]
             if errors:
                 results.append(_contract_error_result(candidate, violations))
             else:
-                executable.append(candidate)
+                contract_ok.append(candidate)
 
+        preflight = filter_preflight_candidates(suite, contract_ok)
         async_results = await asyncio.gather(
-            *(self._execute_one(suite.function_path, candidate) for candidate in executable)
+            *(self._execute_one(suite.function_path, candidate) for candidate in preflight.executable)
         )
         results.extend(async_results)
 
-        summary = merge_batch_results(suite, results, cfg.min_suite_size)
+        summary = merge_batch_results(
+            suite, results, cfg.min_suite_size, preflight_notes=preflight.notes
+        )
         summary.record_redundancy(suite)
         suite.record_batch(
             bool(results) and all(is_hard_fail(result.status) for result in results)
         )
         _raise_if_hard_stop(suite, cfg)
-        return _format_batch_summary(suite, summary)
+        known = self._run_context.branch_catalog_ids or None
+        return _format_batch_summary(
+            suite,
+            summary,
+            known_node_ids=known,
+            path_feedback=self._run_context.path_feedback,
+            include_exec_detail=self._run_context.include_exec_detail,
+        )
 
     def _run(self, candidates: list[dict] | list[GenerateTestAction]) -> str:
         return asyncio.run(self._arun(candidates))
@@ -314,6 +346,7 @@ class ExecuteTestcaseBatchTool(BaseTool):
                 target_node_id=candidate.target_node_id,
                 target_polarity=candidate.target_polarity,
                 target_reason=candidate.target_reason,
+                expected_path=list(candidate.expected_path),
             )
         elapsed = (time.monotonic() - t0) * 1000
         return _result_from_execute_result(
@@ -323,6 +356,7 @@ class ExecuteTestcaseBatchTool(BaseTool):
             target_node_id=candidate.target_node_id,
             target_polarity=candidate.target_polarity,
             target_reason=candidate.target_reason,
+            expected_path=list(candidate.expected_path),
         )
 
 
@@ -334,6 +368,30 @@ class ExecuteTestcaseBatchAnyTool(ExecuteTestcaseBatchTool):
     )
     args_schema: type[BaseModel] = GenerateTestBatchAnyAction
     batch_schema: ClassVar[type[BaseModel]] = GenerateTestBatchAnyAction
+
+
+class ExecuteTestcaseBatchSingleTool(ExecuteTestcaseBatchTool):
+    """Ablation: force one candidate per batch."""
+
+    description: str = (
+        "Compile and execute exactly one C++ test driver body for the active target function. "
+        "Submit a single candidate with a non-empty expected_path. "
+        "Returns accepted/redundant status, suite coverage, and remaining gap guidance."
+    )
+    args_schema: type[BaseModel] = GenerateTestBatchSingleAction
+    batch_schema: ClassVar[type[BaseModel]] = GenerateTestBatchSingleAction
+
+
+class ExecuteTestcaseBatchOptionalPathTool(ExecuteTestcaseBatchTool):
+    """No-path ablation: expected_path is optional on each candidate."""
+
+    description: str = (
+        "Compile and execute a batch of 3-5 C++ test driver bodies for the active target function. "
+        "Prefer distinct structural targets. expected_path is optional in this mode. "
+        "Returns accepted tests, redundant rejections, suite coverage, and remaining gap guidance."
+    )
+    args_schema: type[BaseModel] = GenerateTestBatchOptionalPathAction
+    batch_schema: ClassVar[type[BaseModel]] = GenerateTestBatchOptionalPathAction
 
 
 def _is_compile_or_test_body_error(exc: AkaUTError) -> bool:
@@ -372,10 +430,18 @@ def _contract_error_result(
         target_node_id=action.target_node_id,
         target_polarity=action.target_polarity,
         target_reason=action.target_reason,
+        expected_path=list(action.expected_path),
     )
 
 
-def _format_batch_summary(suite: TestSuite, summary) -> str:
+def _format_batch_summary(
+    suite: TestSuite,
+    summary,
+    *,
+    known_node_ids: set[int] | None = None,
+    path_feedback: bool = True,
+    include_exec_detail: bool = True,
+) -> str:
     lines = ["=== execute_testcase_batch summary ==="]
     lines.append(
         "Accepted: "
@@ -393,9 +459,21 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
             else "none"
         )
     )
-    rejected_details = _format_rejected_redundant_details(summary.rejected_redundant)
+    if summary.preflight_notes:
+        lines.append("Preflight skipped (not executed):")
+        lines.extend(f"- {note}" for note in summary.preflight_notes)
+    rejected_details = _format_rejected_redundant_details(
+        summary.rejected_redundant, known_node_ids=known_node_ids
+    )
     if rejected_details:
         lines.append(rejected_details)
+    if path_feedback:
+        path_details = _format_path_diagnostics(
+            summary.accepted + summary.rejected_redundant,
+            known_node_ids=known_node_ids,
+        )
+        if path_details:
+            lines.append(path_details)
     metrics = suite.coverage.metrics(suite.tests)
     lines.append(
         f"Suite best → Stmt: {metrics.statement_pct * 100:.0f}% | "
@@ -403,16 +481,17 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
         f"batch={suite.batch_count} | redundancy={suite.redundancy_rate * 100:.0f}%"
     )
 
-    failed_logs = [
-        _format_execution_log(result)
-        for result in summary.accepted
-        if result.status != TestStatus.PASSED.value
-    ]
-    failed_logs = [log for log in failed_logs if log]
-    if failed_logs:
-        lines.append("")
-        lines.append("Failed execution logs:")
-        lines.extend(failed_logs)
+    if include_exec_detail:
+        failed_logs = [
+            _format_execution_log(result)
+            for result in summary.accepted
+            if result.status != TestStatus.PASSED.value
+        ]
+        failed_logs = [log for log in failed_logs if log]
+        if failed_logs:
+            lines.append("")
+            lines.append("Failed execution logs:")
+            lines.extend(failed_logs)
 
     lines.append("")
     lines.append(
@@ -423,7 +502,11 @@ def _format_batch_summary(suite: TestSuite, summary) -> str:
     return "\n".join(lines)
 
 
-def _format_rejected_redundant_details(results: list[TestResult]) -> str:
+def _format_rejected_redundant_details(
+    results: list[TestResult],
+    *,
+    known_node_ids: set[int] | None = None,
+) -> str:
     if not results:
         return ""
     lines = ["Redundant diagnostics (0 new structural coverage):"]
@@ -434,7 +517,7 @@ def _format_rejected_redundant_details(results: list[TestResult]) -> str:
             else ""
         )
         lines.append(f"- {result.test_name}:{target}")
-        target_status = _target_observation_status(result)
+        target_status = _target_observation_status(result, known_node_ids=known_node_ids)
         if target_status:
             lines.append(f"  Target observation: {target_status}")
     if len(results) > 3:
@@ -446,8 +529,47 @@ def _format_rejected_redundant_details(results: list[TestResult]) -> str:
     return "\n".join(lines)
 
 
-def _target_observation_status(result: TestResult) -> str:
-    return "target metadata is advisory branch metadata"
+def _format_path_diagnostics(
+    results: list[TestResult],
+    *,
+    known_node_ids: set[int] | None = None,
+) -> str:
+    """Report expected_path vs runtime mismatches for executed candidates."""
+    lines: list[str] = []
+    for result in results:
+        if not effective_expected_path(result):
+            continue
+        comparison = compare_expected_path(result, known_node_ids=known_node_ids)
+        path = effective_expected_path(result)
+        path_text = " → ".join(f"node{s.node_id}={s.polarity}" for s in path)
+        if comparison.matched is True:
+            lines.append(f"- {result.test_name}: expected_path matched ({path_text})")
+            continue
+        if comparison.matched is False:
+            divergence = format_divergence(result, known_node_ids=known_node_ids)
+            lines.append(
+                f"- {result.test_name}: PATH DIVERGENCE — predicted [{path_text}]; "
+                f"{divergence or 'predicted polarity was not observed'}"
+            )
+    if not lines:
+        return ""
+    return "Path diagnostics:\n" + "\n".join(lines)
+
+
+def _target_observation_status(
+    result: TestResult,
+    *,
+    known_node_ids: set[int] | None = None,
+) -> str:
+    comparison = compare_expected_path(result, known_node_ids=known_node_ids)
+    if comparison.matched is None:
+        return "no expected_path/target provided"
+    if comparison.matched is True:
+        path = effective_expected_path(result)
+        return "matched expected_path (" + " → ".join(
+            f"node{s.node_id}={s.polarity}" for s in path
+        ) + ")"
+    return format_divergence(result, known_node_ids=known_node_ids) or "predicted path diverged from runtime"
 
 
 def _yes(value: bool) -> str:
@@ -473,6 +595,7 @@ def _result_from_execute_result(
     target_node_id: int | None = None,
     target_polarity: str | None = None,
     target_reason: str | None = None,
+    expected_path: list[ExpectedPathStep] | None = None,
 ) -> TestResult:
     return TestResult(
         test_name=raw.test_name,
@@ -516,6 +639,7 @@ def _result_from_execute_result(
         target_node_id=target_node_id,
         target_polarity=target_polarity,
         target_reason=target_reason,
+        expected_path=list(expected_path or []),
     )
 
 
@@ -560,6 +684,14 @@ def _format_summary(
             f"Target → node={result.target_node_id} polarity={result.target_polarity}"
             + (f" reason={result.target_reason}" if result.target_reason else "")
         )
+    path = effective_expected_path(result)
+    if path:
+        lines.append(
+            "Expected path → " + " → ".join(f"node{s.node_id}={s.polarity}" for s in path)
+        )
+        path_status = _target_observation_status(result)
+        if path_status:
+            lines.append(f"Path observation: {path_status}")
     if action_warnings:
         lines.append("Action warnings:")
         lines.extend(f"- {warning}" for warning in action_warnings)

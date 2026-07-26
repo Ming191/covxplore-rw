@@ -23,5 +23,17 @@ def line_sort_key(line_in_function: int | None) -> tuple[bool, int | float]:
     )
 
 
+def node_tag(node_id: int | None) -> str:
+    """Stable CFG identity for gap text — never confuse with line_in_function."""
+    return f"nodeId={node_id}" if node_id is not None else "nodeId=?"
+
+
+def node_sort_key(node_id: int | None) -> tuple[bool, int | float]:
+    return (
+        node_id is None,
+        node_id if node_id is not None else float("inf"),
+    )
+
+
 def format_pct(pct: float) -> str:
     return f"{pct * 100:.0f}"

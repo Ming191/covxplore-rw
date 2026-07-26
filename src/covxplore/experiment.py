@@ -42,4 +42,19 @@ def flat_row(result: GenerationResult) -> dict:
         "tokens_per_batch": round((result.total_input_tokens + result.total_output_tokens) / max(result.batches_used, 1), 2),
         "tokens_per_candidate": round((result.total_input_tokens + result.total_output_tokens) / max(result.candidate_count, 1), 2),
         "error": result.error_message or "",
+        **{
+            f"path_{key}": value
+            for key, value in (result.to_summary_dict().get("path_understanding") or {}).items()
+            if key
+            in {
+                "path_candidates",
+                "path_match_rate",
+                "path_divergence_rate",
+                "target_hit_rate",
+                "catalog_id_rate",
+                "repair_success_rate",
+                "matched",
+                "diverged",
+            }
+        },
     }

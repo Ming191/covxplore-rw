@@ -65,6 +65,7 @@ class GenerationResult:
     crew_completion_tokens: int | None = None
     tracing_url: str | None = None
     llm_interactions: list[dict] = field(default_factory=list)
+    branch_catalog_ids: set[int] = field(default_factory=set)
 
     @property
     def redundancy_rate(self) -> float:
@@ -112,7 +113,15 @@ class GenerationResult:
 
     def to_summary_dict(self) -> dict:
         """Canonical summary JSON shape."""
+        from covxplore.coverage.path_understanding import compute_path_understanding_metrics
+
         metrics = self.suite.coverage.metrics(self.suite.tests)
+        known = self.branch_catalog_ids or None
+        path_metrics = compute_path_understanding_metrics(
+            accepted=self.suite.tests,
+            rejected=self.suite.rejected_tests,
+            known_node_ids=known,
+        )
         return {
             "run_id": self.config.run_id,
             "function_path": self.config.function_path,
@@ -138,6 +147,7 @@ class GenerationResult:
                 "tokens_per_batch": round((self.total_input_tokens + self.total_output_tokens) / max(self.batches_used, 1), 2),
                 "tokens_per_candidate": round((self.total_input_tokens + self.total_output_tokens) / max(self.candidate_count, 1), 2),
             },
+            "path_understanding": path_metrics,
             "tracing_url": self.tracing_url,
             "llm_interactions": self.llm_interactions,
             "test_suite": [self._test_summary(t) for t in self.suite.tests],
@@ -158,6 +168,10 @@ class GenerationResult:
             "target_node_id": t.target_node_id,
             "target_polarity": t.target_polarity,
             "target_reason": t.target_reason,
+            "expected_path": [
+                {"node_id": step.node_id, "polarity": step.polarity, "reason": step.reason}
+                for step in (t.expected_path or [])
+            ],
             "test_body": t.test_body,
             "new_structural_coverage": t.new_structural_coverage,
             "statement_coverage": t.statement_coverage.model_dump(),
@@ -173,12 +187,21 @@ def generate(config: GenerationConfig) -> GenerationResult:
 
 
 def _print_result_summary(r: GenerationResult) -> None:
-    m = r.to_summary_dict()["metrics"]
+    summary = r.to_summary_dict()
+    m = summary["metrics"]
+    path = summary.get("path_understanding") or {}
+    path_bit = ""
+    if path.get("path_candidates"):
+        match = path.get("path_match_rate")
+        hit = path.get("target_hit_rate")
+        path_bit = (
+            f"  |  path_match: {match * 100:.0f}%" if match is not None else ""
+        ) + (f"  |  target_hit: {hit * 100:.0f}%" if hit is not None else "")
     _console.print(
         f"  Statement: [bold]{m['statement_coverage_pct'] * 100:.0f}%[/]  |  "
         f"Branch: [bold]{m['branch_coverage_pct'] * 100:.0f}%[/]  |  "
         f"redundancy: {m['redundancy_rate'] * 100:.0f}%  |  "
         f"tokens: {m['total_tokens']:,}  |  "
         f"time: {m['elapsed_sec']:.1f}s  |  "
-        f"stop: {r.stop_reason}"
+        f"stop: {r.stop_reason}{path_bit}"
     )

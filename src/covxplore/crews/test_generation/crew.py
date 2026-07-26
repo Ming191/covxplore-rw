@@ -10,6 +10,8 @@ from covxplore.llm import build_llm
 from covxplore.prompts.builder import PromptBuilder
 from covxplore.tools import (
     ExecuteTestcaseBatchAnyTool,
+    ExecuteTestcaseBatchOptionalPathTool,
+    ExecuteTestcaseBatchSingleTool,
     ExecuteTestcaseBatchTool,
     ExecuteTestcaseTool,
     GetNodeSourceTool,
@@ -125,11 +127,14 @@ def build_crew(
 ) -> tuple["TestGenerationCrew", PromptBuilder]:
     builder = PromptBuilder(prompt_config)
 
-    batch_tool = (
-        ExecuteTestcaseBatchAnyTool
-        if prompt_config.unlimited_batch
-        else ExecuteTestcaseBatchTool
-    )
+    if not prompt_config.require_expected_path:
+        batch_tool = ExecuteTestcaseBatchOptionalPathTool
+    elif prompt_config.unlimited_batch:
+        batch_tool = ExecuteTestcaseBatchAnyTool
+    elif prompt_config.max_batch_candidates <= 1:
+        batch_tool = ExecuteTestcaseBatchSingleTool
+    else:
+        batch_tool = ExecuteTestcaseBatchTool
     tools = [batch_tool(run_context=run_context)]
     if prompt_config.search_tools:
         tools.extend([GetNodeSourceTool(), SearchNodesTool()])

@@ -12,6 +12,8 @@ _STATIC_SECTIONS = ("role_persona", "cot_reasoning", "few_shot_examples", "outpu
 def _workflow_name(config: PromptConfig) -> str:
     if config.unlimited_batch:
         return "unlimited_batch"
+    if not config.require_expected_path:
+        return "no_path"
     if not config.search_tools:
         return "no_search"
     return "search"
@@ -24,11 +26,25 @@ class PromptBuilder:
         self.config = config
 
     def system_prompt(self) -> str:
+        sections = list(self.config.enabled_sections())
+        # Keep CoT/format for coverage-only wording when path is off; only swap
+        # path-specific output_format text via a soft instruction (do not strip sections).
         parts = [
             catalog_text("sections", section)
             for section in _STATIC_SECTIONS
-            if section in self.config.enabled_sections()
+            if section in sections
         ]
+        if not self.config.require_expected_path:
+            # Soften path requirements that remain inside shared YAML sections.
+            parts.append(
+                "Focus on covering uncovered statements and branches. "
+                "Do not predict expected_path; leave expected_path empty."
+            )
+        elif not self.config.path_feedback:
+            parts.append(
+                "Still submit expected_path with each candidate, but path-match "
+                "diagnostics will not be shown after execution — rely on coverage gaps."
+            )
         return self._join(parts) if parts else ""
 
     def task_description(
@@ -38,15 +54,32 @@ class PromptBuilder:
         remaining_batches: int = 0,
         static_context_text: str | None = None,
         static_source_text: str | None = None,
+        static_branch_catalog_text: str | None = None,
     ) -> str:
         from covxplore.types import TestSuite
 
+        batch_hint = (
+            "Prefer execute_testcase_batch with exactly 1 focused test body"
+            if self.config.max_batch_candidates <= 1
+            else "Prefer execute_testcase_batch with 3-5 focused test bodies"
+        )
         parts = [
             catalog_text("task", "description").format(
                 function_path=function_path,
                 workflow=catalog_text("workflows", _workflow_name(self.config)),
+                path_requirement=(
+                    ", each with a distinct non-empty expected_path (ordered branch outcomes to the target)"
+                    if self.config.require_expected_path
+                    else " (omit expected_path)"
+                ),
             )
         ]
+        # Override the default "3-5" wording when single-candidate ablation is on.
+        if self.config.max_batch_candidates <= 1:
+            parts[0] = parts[0].replace(
+                "Prefer execute_testcase_batch with 3-5 focused test bodies",
+                batch_hint,
+            )
 
         if static_context_text:
             parts.append(
@@ -55,6 +88,12 @@ class PromptBuilder:
         if static_source_text:
             parts.append(
                 catalog_text("task", "source").format(content=static_source_text)
+            )
+        if static_branch_catalog_text and self.config.preload_branch_catalog:
+            parts.append(
+                catalog_text("task", "branch_catalog").format(
+                    content=static_branch_catalog_text
+                )
             )
 
         if self.config.coverage_guidance and suite is not None:
@@ -73,7 +112,20 @@ class PromptBuilder:
             )
 
         if self.config.self_reflection:
-            parts.append(catalog_text("sections", "self_reflection"))
+            reflection = catalog_text("sections", "self_reflection")
+            if not self.config.path_feedback:
+                # Drop PATH DIVERGENCE repair instructions when feedback is ablated.
+                filtered = [
+                    line
+                    for line in reflection.splitlines()
+                    if "PATH DIVERGENCE" not in line
+                    and "expected_path disagreed" not in line
+                    and "divergent condition" not in line
+                    and "Shorten the path" not in line
+                    and "BRANCH NODE CATALOG, replace" not in line
+                ]
+                reflection = "\n".join(filtered)
+            parts.append(reflection)
 
         return self._join(parts)
 

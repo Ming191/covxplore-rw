@@ -6,18 +6,32 @@ sections:
     Your sole objective is to maximize statement and branch coverage for target function with a minimal, non-redundant test suite.
     You write correct, compilable C++ test driver bodies and reason carefully about data types and pointer semantics before writing code.
     When branch metadata is available, refer to a branch by nodeId and polarity. The same condition text can appear at multiple nodeIds.
+    Gap lines and the BRANCH NODE CATALOG are tagged [nodeId=N]. Copy that N into expected_path / target_node_id.
+    Never use source line numbers as nodeId — line+N and nodeId are different integers.
+    Before the first batch, use only the BRANCH NODE CATALOG (not guessed line numbers).
 
   cot_reasoning: |
     Before writing each test body, reason through these steps:
 
     STEP 1 — Identify an uncovered target:
-      Choose an uncovered statement or branch. For a branch, state nodeId (condition text) and required TRUE or FALSE polarity.
+      Choose an uncovered statement or branch from coverage guidance by its [nodeId=N] tag,
+      or from the BRANCH NODE CATALOG when gaps are still empty.
+      For a branch, state that exact nodeId (condition text) and required TRUE or FALSE polarity.
+      Do not invent nodeIds from line numbers.
 
-    STEP 2 — Determine concrete input values:
-      Work out exact numeric, pointer, or struct values needed to reach the target.
+    STEP 2 — Predict the expected path:
+      List the ordered branch outcomes (nodeId + TRUE/FALSE) from function entry up to and including
+      the target decision. This is the expected_path vector you submit with the candidate.
+      Prefer a SHORT path (1–4 BRANCH decisions). Only include conditions this test body actually forces.
+      The last step must be a BRANCH nodeId from the catalog/gap (not a line number, not a statement nodeId).
+      When covering an uncovered statement (e.g. return false), target the last BRANCH decision that
+      enables reaching that statement — do not put statement nodeIds in expected_path.
+
+    STEP 3 — Determine concrete input values:
+      Work out exact numeric, pointer, or struct values needed to force that path.
       Check boundary conditions, null pointers, and control-flow prerequisites.
 
-    STEP 3 — Write the test body:
+    STEP 4 — Write the test body:
       Declare all input variables, call the function, and capture return value or observable side effect.
 
   coverage_guidance: |
@@ -44,11 +58,20 @@ sections:
       - Read execute_log and fix blocking issue.
       - Continue coverage-driven generation.
 
+    IF PATH DIVERGENCE is reported:
+      - Your expected_path disagreed with the runtime branch outcomes at the first mismatched step.
+      - Re-examine input/state that controls the divergent condition; do not reuse the same expected_path.
+      - Shorten the path to the first reachable decision if control never reached later steps.
+      - If nodeId is not in the BRANCH NODE CATALOG, replace it with a real [nodeId=N] from catalog/gap.
+
     IF is_redundant == True:
-      - Do not re-submit same or similar test.
+      - Do not re-submit same or similar test / same expected_path.
       - Choose a different uncovered statement or branch from coverage guidance.
 
-    IF status == PASSED:
+    IF Preflight skipped:
+      - That candidate's target/path was already covered or duplicated in the batch; pick a new gap.
+
+    IF status == PASSED and path matched:
       - Move to next uncovered statement or branch.
 
   few_shot_examples: |
@@ -68,7 +91,22 @@ sections:
       int AKA_AI_result = clamp(AKA_AI_x, AKA_AI_lo, AKA_AI_hi);
 
   output_format: |
-    OUTPUT FORMAT for test bodies submitted to execute_testcase_batch or execute_testcase:
+    OUTPUT FORMAT for candidates submitted to execute_testcase_batch or execute_testcase:
+
+    Each candidate MUST include a non-empty expected_path (ordered nodeId + TRUE/FALSE from
+    function entry to the target). Do not submit candidates with expected_path=[].
+    node_id values MUST come from [nodeId=…] tags in the BRANCH NODE CATALOG or coverage guidance —
+    never from line numbers.
+
+      expected_path: [
+        {"node_id": 12, "polarity": "TRUE"},
+        {"node_id": 19, "polarity": "FALSE"}
+      ]
+      target_node_id / target_polarity: last expected_path step (auto-filled from expected_path if omitted)
+
+    Within one batch, candidates MUST have distinct expected_path vectors.
+    If path A is a proper prefix of path B, only B is kept (A is skipped as dominated).
+    Already-covered targets are skipped before execution.
 
     The test_body argument must be raw C++ code that will be inserted verbatim into
     AkaUT's generated test harness. Rules:
@@ -98,6 +136,10 @@ workflows:
   no_search: >-
     Plan one batch for this session and call execute_testcase_batch exactly once with 3-5 focused test bodies.
     No search/source tools are available in this variant; use only the preloaded source and coverage feedback.
+  no_path: >-
+    Plan one batch for this session and call execute_testcase_batch exactly once with 3-5 focused test bodies.
+    Do NOT submit expected_path (leave it empty / omit). Focus only on covering statement and branch gaps.
+    No search/source tools are available; use preloaded source and coverage feedback.
   search: |-
     Plan one batch for this session and call execute_testcase_batch exactly once with 3-5 focused test bodies; do not search before that execution.
     If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol before the batch.
@@ -126,7 +168,7 @@ task:
     Workflow:
     Use preloaded context and source as ground truth.
     {workflow}
-    Prefer execute_testcase_batch with 3-5 focused test bodies targeting distinct obligations; use fewer only when fewer useful candidates remain.
+    Prefer execute_testcase_batch with 3-5 focused test bodies{path_requirement}; use fewer only when fewer useful candidates remain.
     Stop after the batch result and output DONE. The Flow will relaunch a fresh session with updated coverage feedback if more work remains.
   context: |
     FUNCTION CONTEXT:
@@ -135,4 +177,6 @@ task:
   source: |
     FOCAL SOURCE:
 
+    {content}
+  branch_catalog: |
     {content}
