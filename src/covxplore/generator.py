@@ -66,6 +66,10 @@ class GenerationResult:
     tracing_url: str | None = None
     llm_interactions: list[dict] = field(default_factory=list)
     branch_catalog_ids: set[int] = field(default_factory=set)
+    _elapsed_sec: float = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._elapsed_sec = self.suite.elapsed_sec
 
     @property
     def redundancy_rate(self) -> float:
@@ -85,7 +89,7 @@ class GenerationResult:
 
     @property
     def elapsed_sec(self) -> float:
-        return round(self.suite.elapsed_sec, 2)
+        return round(self._elapsed_sec, 2)
 
     @property
     def batches_used(self) -> int:

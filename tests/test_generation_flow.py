@@ -1,3 +1,4 @@
+import time
 from types import SimpleNamespace
 
 from covxplore.generation.prompt_context import StaticPromptData
@@ -78,6 +79,9 @@ def test_flow_spawns_new_crew_per_batch_and_aggregates_tokens(monkeypatch):
     assert result.total_output_tokens == 40
     assert result.batches_used == 2
     assert len(result.suite.tests) == 2
+    elapsed = result.elapsed_sec
+    time.sleep(0.01)
+    assert result.elapsed_sec == elapsed
 
 
 def test_flow_stops_on_max_batches_not_candidate_count(monkeypatch):
