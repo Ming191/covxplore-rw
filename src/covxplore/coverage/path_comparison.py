@@ -198,27 +198,32 @@ def _matching_condition_steps(
         return []
     condition_steps = result.trace_summary.target_function_condition_steps
     by_node = [s for s in condition_steps if s.node_id == step.node_id]
-    if by_node:
+    if _latest_runtime_values(by_node):
         return by_node
     if branch is None:
-        return []
+        return by_node
+
+    # AkaUT emits operand snapshots immediately before evaluation of an instrumented
+    # subcondition. CFG branch IDs can point at an adjacent decision node instead.
     by_offset = [
         s
         for s in condition_steps
-        if s.node_id is None
-        and s.start == branch.start_offset
+        if s.start == branch.start_offset
         and s.end == branch.end_offset
         and (branch.line_in_function is None or s.line == branch.line_in_function)
     ]
-    if by_offset:
+    if _latest_runtime_values(by_offset):
         return by_offset
-    return [
+
+    same_line = [
         s
         for s in condition_steps
-        if s.node_id is None
-        and branch.line_in_function is not None
+        if branch.line_in_function is not None
         and s.line == branch.line_in_function
     ]
+    if _latest_runtime_values(same_line):
+        return same_line
+    return by_node
 
 
 def _latest_runtime_values(steps: list[TargetFunctionConditionStep]) -> list[RuntimeValue]:

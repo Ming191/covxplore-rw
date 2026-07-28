@@ -17,6 +17,11 @@ class _FakeBuilder:
         return "task"
 
 
+class _KnowledgeBuilder(_FakeBuilder):
+    def task_description(self, **kwargs):
+        return kwargs.get("dynamic_knowledge_text") or "task"
+
+
 class _FakeCrewInst:
     def __init__(self, calls, prompt, completion, candidates_per_batch=1, cover_false_on_second=True):
         self.calls = calls
@@ -82,6 +87,65 @@ def test_flow_spawns_new_crew_per_batch_and_aggregates_tokens(monkeypatch):
     elapsed = result.elapsed_sec
     time.sleep(0.01)
     assert result.elapsed_sec == elapsed
+
+
+def test_flow_persists_dynamic_knowledge_between_sessions(monkeypatch):
+    calls = []
+
+    class KnowledgeCrew:
+        usage_metrics = None
+
+        def __init__(self, run_context):
+            self.run_context = run_context
+
+        def kickoff(self, inputs):
+            prior_knowledge = dict(self.run_context.dynamic_knowledge)
+            calls.append((prior_knowledge, inputs["task_description"]))
+            if not prior_knowledge:
+                self.run_context.remember_knowledge("search:Parser:CLASS", "Found Parser")
+            suite = self.run_context.active_suite()
+            suite.add_result(
+                TestResult(
+                    test_name=f"t{len(calls)}", test_body="f();", status="PASSED",
+                    statement_coverage=CoverageDetail(visited=1, total=3),
+                    branch_coverage=CoverageDetail(visited=1, total=3),
+                    unvisited_statements=[UnvisitedStatement(node_id=2, statement="later")],
+                    unvisited_branches=[
+                        UnvisitedBranch(
+                            node_id=2,
+                            condition="later",
+                            true_visited=False,
+                            false_visited=False,
+                        )
+                    ],
+                ),
+                min_suite_size=99,
+            )
+            suite.record_batch(False)
+
+    class CrewInst:
+        def __init__(self, run_context):
+            self._crew = KnowledgeCrew(run_context)
+
+        def crew(self):
+            return self._crew
+
+    def crew_builder(prompt_config, *, agent_max_iter, start_batch, run_context, reasoning=False):
+        return CrewInst(run_context), _KnowledgeBuilder()
+
+    monkeypatch.setattr("covxplore.flows.generation_flow.init_observability", lambda: None)
+    monkeypatch.setattr("covxplore.flows.generation_flow.trace_observation", _null_trace)
+    monkeypatch.setattr("covxplore.generation.tokens.TokenLedger.record_trace", lambda self, trace_id: None)
+
+    config = GenerationConfig(function_path="/f.cpp::f()", prompt_variant="full", max_batches=2, run_id="cache")
+    result = GenerationFlowRunner(
+        crew_builder=crew_builder,
+        static_fetcher=lambda path: StaticPromptData("context", "source"),
+    ).run(config)
+
+    assert result.batches_used == 2
+    assert calls[1][0] == {"search:Parser:CLASS": "Found Parser"}
+    assert calls[1][1] == "[search:Parser:CLASS]\nFound Parser"
 
 
 def test_flow_stops_on_max_batches_not_candidate_count(monkeypatch):

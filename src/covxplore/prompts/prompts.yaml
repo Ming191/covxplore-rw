@@ -68,7 +68,7 @@ sections:
       - Do not re-submit same or similar test / same expected_path.
       - Choose a different uncovered statement or branch from coverage guidance.
 
-    IF Preflight skipped:
+    IF Pre-execution skipped:
       - That candidate's target/path was already covered or duplicated in the batch; pick a new gap.
 
     IF status == PASSED and path matched:

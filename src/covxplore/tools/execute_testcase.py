@@ -74,6 +74,38 @@ class RunContext:
     path_feedback: bool = True
     include_exec_detail: bool = True
     max_batch_candidates: int = 5
+    dynamic_knowledge: dict[str, str] = field(default_factory=dict)
+    search_calls: int = 0
+    source_calls: int = 0
+    discovery_locked: bool = False
+
+    def allow_discovery(self, kind: str) -> str | None:
+        if self.discovery_locked:
+            return (
+                "[DISCOVERY_LOCKED] Discovery phase is closed after a missed execution. "
+                "Call execute_testcase_batch now."
+            )
+        calls = self.search_calls if kind == "search" else self.source_calls
+        tool_name = "search_nodes" if kind == "search" else "get_node_source"
+        if calls >= 2:
+            return (
+                f"[DISCOVERY_BUDGET_EXHAUSTED] {tool_name} budget is 2 per batch. "
+                "Use preloaded context and call execute_testcase_batch now."
+            )
+        if kind == "search":
+            self.search_calls += 1
+        else:
+            self.source_calls += 1
+        return None
+
+    def lock_discovery(self) -> None:
+        self.discovery_locked = True
+
+    def remember_knowledge(self, key: str, value: str) -> None:
+        self.dynamic_knowledge.pop(key, None)
+        self.dynamic_knowledge[key] = value
+        while len(self.dynamic_knowledge) > 20:
+            self.dynamic_knowledge.pop(next(iter(self.dynamic_knowledge)))
 
     def get_suite(self, run_id: str) -> TestSuite | None:
         return self._suites.get(run_id)

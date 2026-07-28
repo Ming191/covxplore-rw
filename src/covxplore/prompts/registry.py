@@ -234,8 +234,8 @@ VARIANTS: dict[str, PromptConfig] = {
         include_exec_detail=True,
         max_batch_candidates=5,
     ),
-    "gap_ids_only": PromptConfig(
-        "gap_ids_only",
+    "wo_branch_catalog": PromptConfig(
+        "wo_branch_catalog",
         role_persona=True,
         cot_reasoning=True,
         coverage_guidance=True,
@@ -332,7 +332,7 @@ def get_q1_ablation_variants() -> list[str]:
         "ours",
         "wo_gaps",
         "wo_search",
-        "gap_ids_only",
+        "wo_branch_catalog",
         "wo_path",
         "wo_path_feedback",
         "wo_batch",

@@ -209,6 +209,44 @@ def test_format_divergence_matches_runtime_operands_by_offsets_without_node_id()
     assert "runtime operands: a=1 (int)" in text
 
 
+def test_format_divergence_uses_subcondition_operands_for_adjacent_decision_node():
+    result = _result(
+        expected_path=[ExpectedPathStep(node_id=18, polarity="TRUE")],
+        branches=[
+            UnvisitedBranch(
+                node_id=18,
+                condition="ch == delimiter",
+                true_visited=False,
+                false_visited=True,
+                line_in_function=92,
+                start_offset=2780,
+                end_offset=2795,
+            )
+        ],
+    )
+    result.trace_summary = TraceSummary.model_validate(
+        {"targetFunctionConditionSteps": [
+            {
+                "line": 92,
+                "start": 2780,
+                "end": 2795,
+                "nodeId": 17,
+                "runtimeValues": [
+                    {"expression": "ch", "value": "\\n", "type": "char"},
+                    {"expression": "delimiter", "value": '\"', "type": "char"},
+                ],
+            },
+            {"line": 92, "start": 2780, "end": 2795, "nodeId": 18, "branch": "FALSE"},
+        ]}
+    )
+
+    text = format_divergence(result)
+
+    assert text is not None
+    assert "node 18" in text
+    assert 'runtime operands: ch=\\n (char), delimiter=" (char)' in text
+
+
 def test_format_divergence_caps_and_truncates_runtime_operands():
     result = _result(
         expected_path=[ExpectedPathStep(node_id=2, polarity="FALSE")],

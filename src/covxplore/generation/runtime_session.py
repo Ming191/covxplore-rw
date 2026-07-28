@@ -28,6 +28,7 @@ class GenerationFlowState(BaseModel):
     token_ledger: dict = Field(default_factory=dict)
     trace_urls: list[str] = Field(default_factory=list)
     llm_interactions: list[dict] = Field(default_factory=list)
+    dynamic_knowledge: dict[str, str] = Field(default_factory=dict)
 
 
 class TestSuiteCodec:
@@ -169,6 +170,9 @@ class GenerationRuntimeSession:
     def restore_ledger(self, snapshot: Mapping[str, Any]) -> None:
         self.token_ledger = TokenLedger.from_dict(dict(snapshot or {}))
 
+    def restore_dynamic_knowledge(self, snapshot: Mapping[str, str]) -> None:
+        self.run_context.dynamic_knowledge = dict(snapshot or {})
+
     def record_crew_run(self, crew_inst, tracing_url: str | None) -> None:
         self.token_ledger.record_crew(crew_inst)
         resolved_url = tracing_url or get_trace_url()
@@ -197,6 +201,7 @@ class GenerationRuntimeSession:
             token_ledger=self.token_ledger.to_dict(),
             trace_urls=list(self.trace_urls),
             llm_interactions=llm_interactions or [],
+            dynamic_knowledge=dict(self.run_context.dynamic_knowledge),
         )
 
     def cleanup(self) -> None:

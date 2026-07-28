@@ -3,6 +3,7 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from covxplore.api_client import AkaUTClient, AkaUTError
+from covxplore.tools.execute_testcase import RunContext
 
 
 class _Input(BaseModel):
@@ -34,19 +35,36 @@ class GetNodeSourceTool(BaseTool):
         "the test body with minimal values when enough to drive coverage."
     )
     args_schema: type[BaseModel] = _Input
+    _run_context: RunContext | None = None
+
+    def __init__(self, run_context: RunContext | None = None, **data):
+        super().__init__(**data)
+        object.__setattr__(self, "_run_context", run_context)
 
     def _run(self, absolute_path: str) -> str:
+        if self._run_context:
+            blocked = self._run_context.allow_discovery("source")
+            if blocked:
+                return blocked
+        key = "source:" + absolute_path.replace("\\", "/")
+        if self._run_context and key in self._run_context.dynamic_knowledge:
+            return self._run_context.dynamic_knowledge[key]
         try:
             with AkaUTClient() as client:
                 try:
                     result = client.get_node_source(absolute_path)
                 except AkaUTError as exc:
                     if exc.status_code == 404:
-                        return _source_unavailable(absolute_path)
-                    raise
-            return _format_source(absolute_path, result)
+                        output = _source_unavailable(absolute_path)
+                    else:
+                        raise
+                else:
+                    output = _format_source(absolute_path, result)
         except AkaUTError as exc:
             return f"[ERROR] get_node_source failed: {exc}"
+        if self._run_context:
+            self._run_context.remember_knowledge(key, output)
+        return output
 
 
 def _format_source(path: str, result, note: str | None = None) -> str:

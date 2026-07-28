@@ -55,6 +55,7 @@ class PromptBuilder:
         static_context_text: str | None = None,
         static_source_text: str | None = None,
         static_branch_catalog_text: str | None = None,
+        dynamic_knowledge_text: str | None = None,
     ) -> str:
         from covxplore.types import TestSuite
 
@@ -94,6 +95,13 @@ class PromptBuilder:
                 catalog_text("task", "branch_catalog").format(
                     content=static_branch_catalog_text
                 )
+            )
+        if dynamic_knowledge_text:
+            parts.append(
+                "PRIOR DISCOVERY FROM EARLIER SESSIONS:\n"
+                + dynamic_knowledge_text
+                + "\nUse this as established context. Search and source tools return this same "
+                "result for an exact repeated lookup."
             )
 
         if self.config.coverage_guidance and suite is not None:

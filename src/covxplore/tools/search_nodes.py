@@ -3,6 +3,7 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from covxplore.api_client import AkaUTClient, AkaUTError
+from covxplore.tools.execute_testcase import RunContext
 
 
 class _Input(BaseModel):
@@ -40,8 +41,20 @@ class SearchNodesTool(BaseTool):
         "no function body. If a search returns no nodes, do not retry query variants."
     )
     args_schema: type[BaseModel] = _Input
+    _run_context: RunContext | None = None
+
+    def __init__(self, run_context: RunContext | None = None, **data):
+        super().__init__(**data)
+        object.__setattr__(self, "_run_context", run_context)
 
     def _run(self, query: str, types: list[str] | None = None) -> str:
+        if self._run_context:
+            blocked = self._run_context.allow_discovery("search")
+            if blocked:
+                return blocked
+        key = f"search:{query}:{','.join(types or [])}"
+        if self._run_context and key in self._run_context.dynamic_knowledge:
+            return self._run_context.dynamic_knowledge[key]
         try:
             with AkaUTClient() as client:
                 nodes = client.search_nodes(query, types)
@@ -49,12 +62,15 @@ class SearchNodesTool(BaseTool):
             return f"[ERROR] search_nodes failed: {exc}"
 
         if not nodes:
-            return f"No nodes found matching query={query!r} types={types}."
-
-        lines = [f"Found {len(nodes)} node(s) for query={query!r}:"]
-        for n in nodes[:20]:
-            lines.append(
-                f"  [{n.type}] {n.qualified_name}  line={n.line}\n"
-                f"    absolutePath={n.absolute_path!r}"
-            )
-        return "\n".join(lines)
+            result = f"No nodes found matching query={query!r} types={types}."
+        else:
+            lines = [f"Found {len(nodes)} node(s) for query={query!r}:"]
+            for n in nodes[:20]:
+                lines.append(
+                    f"  [{n.type}] {n.qualified_name}  line={n.line}\n"
+                    f"    absolutePath={n.absolute_path!r}"
+                )
+            result = "\n".join(lines)
+        if self._run_context:
+            self._run_context.remember_knowledge(key, result)
+        return result

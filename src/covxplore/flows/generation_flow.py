@@ -45,6 +45,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
         self.state.static_prompt = _dump_static_prompt(static_prompt)
         self.state.suite = session.suite_codec.dump_suite(suite)
         self.state.token_ledger = session.token_ledger.to_dict()
+        self.state.dynamic_knowledge = {}
         self.state.trace_urls = []
         self.state.stop_reason = "agent_done"
         self.state.error_message = None
@@ -62,6 +63,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
             session = GenerationRuntimeSession(config)
             session.restore_suite(self.state.suite)
             session.restore_ledger(self.state.token_ledger)
+            session.restore_dynamic_knowledge(self.state.dynamic_knowledge)
             session.trace_urls = list(self.state.trace_urls)
             suite = session.active_suite()
             start_batch = suite.batch_count
@@ -94,6 +96,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
                             if prompt_config.preload_branch_catalog
                             else None
                         ),
+                        dynamic_knowledge_text=_knowledge_text(session.run_context.dynamic_knowledge),
                     ),
                 }
                 session.run_context.path_feedback = prompt_config.path_feedback
@@ -137,6 +140,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
                 )
                 self.state.suite = snapshot.suite
                 self.state.token_ledger = snapshot.token_ledger
+                self.state.dynamic_knowledge = snapshot.dynamic_knowledge
                 self.state.trace_urls = snapshot.trace_urls
                 self.state.stop_reason = snapshot.stop_reason
                 self.state.error_message = snapshot.error_message
@@ -199,6 +203,14 @@ class GenerationFlowRunner:
 
     def resume(self, state_id: str):
         raise NotImplementedError("Flow resume CLI wiring is not implemented yet")
+
+
+def _knowledge_text(knowledge: dict[str, str]) -> str | None:
+    if not knowledge:
+        return None
+    entries = [f"[{key}]\n{value}" for key, value in knowledge.items()]
+    text = "\n\n".join(entries)
+    return text[:12000]
 
 
 def _dump_static_prompt(data: StaticPromptData) -> dict:

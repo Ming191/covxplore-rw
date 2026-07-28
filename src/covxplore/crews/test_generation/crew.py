@@ -32,9 +32,10 @@ def _guard(ctx: RunContext, start_batch: int, max_forces: int = 3):
             return True, output
 
         forced += 1
+        ctx.lock_discovery()
         return False, (
             "Final answer emitted before executing this session's batch. "
-            "Do not finish yet; call execute_testcase_batch exactly once."
+            "Discovery is now disabled; call execute_testcase_batch exactly once."
         )
 
     return check
@@ -137,7 +138,10 @@ def build_crew(
         batch_tool = ExecuteTestcaseBatchTool
     tools = [batch_tool(run_context=run_context)]
     if prompt_config.search_tools:
-        tools.extend([GetNodeSourceTool(), SearchNodesTool()])
+        tools.extend([
+            GetNodeSourceTool(run_context=run_context),
+            SearchNodesTool(run_context=run_context),
+        ])
 
     crew_inst = TestGenerationCrew(
         tools=tools,

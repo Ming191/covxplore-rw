@@ -147,7 +147,7 @@ def run_parallel() -> None:
     parser.add_argument(
         "--q1-ablation",
         action="store_true",
-        help="Run Q1 mechanism ablation preset (ours + wo_* / gap_ids_only).",
+        help="Run Q1 mechanism ablation preset (ours + wo_* variants).",
     )
     parser.add_argument(
         "--repeat", "-r", type=int, default=None,

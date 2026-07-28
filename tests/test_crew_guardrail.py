@@ -13,10 +13,12 @@ def _ctx(suite: TestSuite) -> RunContext:
 def test_guard_retries_final_answer_before_session_batch():
     suite = TestSuite(function_path="f")
 
-    ok, message = _guard(_ctx(suite), start_batch=0)("done")
+    ctx = _ctx(suite)
+    ok, message = _guard(ctx, start_batch=0)("done")
 
     assert ok is False
-    assert "call execute_testcase_batch exactly once" in message
+    assert "Discovery is now disabled" in message
+    assert ctx.discovery_locked is True
 
 
 def test_guard_accepts_final_answer_after_session_batch():
