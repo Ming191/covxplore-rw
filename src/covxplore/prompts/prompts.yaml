@@ -141,8 +141,8 @@ workflows:
     Do NOT submit expected_path (leave it empty / omit). Focus only on covering statement and branch gaps.
     No search/source tools are available; use preloaded source and coverage feedback.
   search: |-
-    Plan one batch for this session and call execute_testcase_batch exactly once with 3-5 focused test bodies; do not search before that execution.
-    If a helper/type is still unclear, use search_nodes then get_node_source only for that missing symbol before the batch.
+    Preloaded context is complete for the first batch. Do NOT call search/source tools to verify or expand it.
+    Call execute_testcase_batch exactly once with 3-5 focused test bodies. Search only in a later session after an execution error identifies a missing symbol or contract.
 
 coverage:
   no_tests: >-

@@ -22,9 +22,11 @@ class TargetFunctionConditionStep(BaseModel):
     sub: str | None = None
     node_id: int | None = Field(default=None, alias="nodeId")
     branch: str | bool | None = None
-    mcdc_role: str | None = Field(default=None, alias="mcdcRole")
-    mcdc_leaf: str | None = Field(default=None, alias="mcdcLeaf")
-    mcdc_value: bool | None = Field(default=None, alias="mcdcValue")
+    decision_role: str | None = Field(default=None, alias="decisionRole")
+    decision_id: str | None = Field(default=None, alias="decisionId")
+    condition_index: int | None = Field(default=None, alias="conditionIndex")
+    condition_value: bool | None = Field(default=None, alias="conditionValue")
+    decision_value: bool | None = Field(default=None, alias="decisionValue")
     runtime_values: list[RuntimeValue] = Field(default_factory=list, alias="runtimeValues")
 
 

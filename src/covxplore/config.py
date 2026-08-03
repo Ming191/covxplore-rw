@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # an LLM call subject to the same truncation risk on top of the normal task calls.
     max_tokens: int = 8000
     llm_temperature: float = 0.4
+    llm_timeout_sec: int = 180
+    llm_max_retries: int = 0
+    llm_thinking: bool | None = None
 
     # When enabled, the test_generator agent reflects and drafts a plan before executing
     # each task (CrewAI's built-in "reasoning" feature). This is the toggle that surfaces

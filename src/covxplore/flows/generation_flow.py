@@ -58,7 +58,6 @@ class GenerationFlow(Flow[GenerationFlowState]):
         stop_reason: StopReason = "agent_done"
         error_message = None
 
-        init_observability()
         while stop_reason == "agent_done":
             session = GenerationRuntimeSession(config)
             session.restore_suite(self.state.suite)
@@ -102,16 +101,8 @@ class GenerationFlow(Flow[GenerationFlowState]):
                 session.run_context.path_feedback = prompt_config.path_feedback
                 session.run_context.include_exec_detail = prompt_config.include_exec_detail
                 session.run_context.max_batch_candidates = prompt_config.max_batch_candidates
-                with trace_observation(
-                    "covxplore.generate.session",
-                    run_id=config.run_id,
-                    function_path=config.function_path,
-                    prompt_variant=config.prompt_variant,
-                    start_batch=start_batch,
-                ) as langfuse_url:
-                    tracing_url = langfuse_url
-                    crew = crew_inst.crew()
-                    crew.kickoff(inputs=inputs)
+                crew = crew_inst.crew()
+                crew.kickoff(inputs=inputs)
             except HardStop as exc:
                 stop_reason = exc.reason  # type: ignore[assignment]
                 error_message = None
@@ -178,6 +169,7 @@ class GenerationFlowRunner:
             console=self._console,
             initial_state=GenerationFlowState(config=config.to_dict()),
         )
+        flow.state.config = config.to_dict()
         final_state = flow.kickoff()
         if isinstance(final_state, GenerationFlowState):
             state = final_state

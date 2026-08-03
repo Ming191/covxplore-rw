@@ -7,6 +7,7 @@ from typing import Any
 from crewai import LLM
 
 from covxplore.config import get_settings
+from covxplore.generation.deepseek_thinking import DeepSeekThinkingInterceptor
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,12 @@ class LLMProvider(ABC):
             base_url=llm_cfg.base_url,
             max_tokens=cfg.max_tokens,
             temperature=cfg.llm_temperature,
+            additional_params={"extra_body": {"thinking": {"type": "enabled"}}}
+            if cfg.llm_thinking and llm_cfg.provider_name == "DeepSeek"
+            else {},
+            interceptor=DeepSeekThinkingInterceptor()
+            if cfg.llm_thinking and llm_cfg.provider_name == "DeepSeek"
+            else None,
         )
 
 

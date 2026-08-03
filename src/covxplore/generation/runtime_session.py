@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 from covxplore.coverage.state import CoverageState
 from covxplore.generation.stop_reasons import StopPolicy, StopReason
 from covxplore.generation.tokens import TokenLedger
-from covxplore.observability import extract_trace_id, flush_observability, get_trace_url
 from covxplore.tools.execute_testcase import RunContext
 from covxplore.types import (
     TestResult,
@@ -173,13 +172,8 @@ class GenerationRuntimeSession:
     def restore_dynamic_knowledge(self, snapshot: Mapping[str, str]) -> None:
         self.run_context.dynamic_knowledge = dict(snapshot or {})
 
-    def record_crew_run(self, crew_inst, tracing_url: str | None) -> None:
+    def record_crew_run(self, crew_inst, tracing_url: str | None = None) -> None:
         self.token_ledger.record_crew(crew_inst)
-        resolved_url = tracing_url or get_trace_url()
-        if resolved_url:
-            self.trace_urls.append(resolved_url)
-        flush_observability()
-        self.token_ledger.record_trace(extract_trace_id(resolved_url))
 
     def finalize_tokens(self) -> None:
         self.token_ledger.finalize_suite(self.active_suite())

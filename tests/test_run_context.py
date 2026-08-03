@@ -34,9 +34,10 @@ def test_parse_trace_summary_accepts_target_function_condition_steps_contract():
                     "sub": "a == b",
                     "nodeId": 9,
                     "branch": "FALSE",
-                    "mcdcRole": "decision",
-                    "mcdcLeaf": "a == b",
-                    "mcdcValue": False,
+                    "decisionRole": "condition",
+                    "decisionId": "foo:8:15",
+                    "conditionIndex": 0,
+                    "conditionValue": False,
                     "runtimeValues": [
                         {"expression": "a", "value": "1", "type": "int"},
                         {"expression": "b", "value": "2", "type": "int"},
