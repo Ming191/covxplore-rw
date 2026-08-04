@@ -25,6 +25,15 @@ def test_hard_stop_requires_structural_totals():
     suite.batch_count = 1
     suite.tests = [TestResult(test_name="t", test_body="", status="PASSED")]
     assert _policy().hard_stop_reason(suite) is None
+    assert _policy().terminal_reason(suite) == "agent_done"
+
+
+def test_seeded_zero_coverage_is_not_complete():
+    suite = TestSuite(function_path="f")
+    suite.coverage.seed_totals(7, 4)
+    suite.batch_count = 1
+    suite.tests = [TestResult(test_name="t", test_body="", status="FAILED")]
+    assert _policy().terminal_reason(suite) == "agent_done"
 
 
 def test_from_config_uses_structural_defaults():

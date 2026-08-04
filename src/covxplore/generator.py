@@ -21,6 +21,7 @@ class GenerationConfig:
 
     function_path: str
     prompt_variant: str
+    context_version: str = field(default_factory=lambda: get_settings().context_version)
     max_batches: int = field(default_factory=lambda: get_settings().max_batches)
     redundant_streak_limit: int = field(
         default_factory=lambda: get_settings().redundant_streak_limit
@@ -32,6 +33,8 @@ class GenerationConfig:
     run_id: str | None = None
 
     def __post_init__(self):
+        if self.context_version not in {"v1", "v2"}:
+            raise ValueError("context_version must be 'v1' or 'v2'")
         if not self.run_id:
             base = self.function_path.split("::")[-1].split("(")[0]
             if not base:
@@ -45,6 +48,7 @@ class GenerationConfig:
             "run_id": self.run_id,
             "function_path": self.function_path,
             "prompt_variant": self.prompt_variant,
+            "context_version": self.context_version,
             "max_batches": self.max_batches,
             "redundant_streak_limit": self.redundant_streak_limit,
             "fail_streak_limit": self.fail_streak_limit,
@@ -130,6 +134,7 @@ class GenerationResult:
             "run_id": self.config.run_id,
             "function_path": self.config.function_path,
             "prompt_variant": self.config.prompt_variant,
+            "context_version": self.config.context_version,
             "stop_reason": self.stop_reason,
             "error": self.error_message,
             "metrics": {

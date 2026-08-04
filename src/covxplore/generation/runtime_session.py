@@ -99,6 +99,7 @@ class TestSuiteCodec:
             ],
             "_total_statements": coverage._total_statements,
             "_total_branches": coverage._total_branches,
+            "_structural_totals_known": coverage._structural_totals_known,
         }
 
     def _load_coverage(self, data: Mapping[str, Any]) -> CoverageState:
@@ -128,6 +129,7 @@ class TestSuiteCodec:
 
         coverage._total_statements = self._non_negative_int(data.get("_total_statements"), "_total_statements")
         coverage._total_branches = self._non_negative_int(data.get("_total_branches"), "_total_branches")
+        coverage._structural_totals_known = bool(data.get("_structural_totals_known", False))
         return coverage
 
     @staticmethod

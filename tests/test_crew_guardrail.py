@@ -1,38 +1,36 @@
-from covxplore.crews.test_generation.crew import _guard
-from covxplore.types import TestResult, TestSuite
-from covxplore.tools.execute_testcase import RunContext
+from covxplore.agents.schemas import (
+    GenerateTestBatchAction,
+    GenerateTestBatchAnyAction,
+    GenerateTestBatchOptionalPathAction,
+    GenerateTestBatchSingleAction,
+)
+from covxplore.crews.test_generation.crew import _validate_batch_json, batch_types
+from covxplore.prompts.registry import get_variant
 
 
-def _ctx(suite: TestSuite) -> RunContext:
-    ctx = RunContext()
-    ctx._suites["run"] = suite
-    ctx._active_run_id = "run"
-    return ctx
+def test_default_variant_uses_bounded_batch_schema():
+    assert batch_types(get_variant("ours")) is GenerateTestBatchAction
 
 
-def test_guard_retries_final_answer_before_session_batch():
-    suite = TestSuite(function_path="f")
+def test_ablation_variants_select_matching_batch_schema():
+    assert batch_types(get_variant("wo_batch")) is GenerateTestBatchSingleAction
+    assert batch_types(get_variant("no_search_unlimited")) is GenerateTestBatchAnyAction
+    assert batch_types(get_variant("wo_path")) is GenerateTestBatchOptionalPathAction
 
-    ctx = _ctx(suite)
-    ok, message = _guard(ctx, start_batch=0)("done")
+
+def test_batch_guard_strips_prose_and_returns_validated_json():
+    ok, output = _validate_batch_json(GenerateTestBatchAction)(
+        'analysis before\n```json\n{"candidates":[{"test_body":"f();",'
+        '"expected_path":[{"node_id":1,"polarity":"TRUE"}]}]}\n```'
+    )
+
+    assert ok is True
+    assert output.startswith('{"candidates"')
+    assert "analysis before" not in output
+
+
+def test_batch_guard_rejects_invalid_payload_without_retry():
+    ok, message = _validate_batch_json(GenerateTestBatchAction)("no json")
 
     assert ok is False
-    assert "Discovery is now disabled" in message
-    assert ctx.discovery_locked is True
-
-
-def test_guard_accepts_final_answer_after_session_batch():
-    suite = TestSuite(function_path="f")
-    suite.record_batch(False)
-
-    assert _guard(_ctx(suite), start_batch=0)("done") == (True, "done")
-
-
-def test_guard_retries_three_final_answers_then_accepts():
-    suite = TestSuite(function_path="f")
-    guard = _guard(_ctx(suite), start_batch=0)
-
-    assert guard("done")[0] is False
-    assert guard("done")[0] is False
-    assert guard("done")[0] is False
-    assert guard("done") == (True, "done")
+    assert message == "Return one JSON object with a candidates array."

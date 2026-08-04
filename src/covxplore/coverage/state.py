@@ -35,6 +35,7 @@ class CoverageState:
     _total_branches: int = 0
     _best_statement_visited: int = 0
     _best_branch_visited: int = 0
+    _structural_totals_known: bool = False
     consecutive_redundant: int = 0
     """Counter of back-to-back redundant tests; reset on progress."""
 
@@ -57,8 +58,16 @@ class CoverageState:
         self.consecutive_redundant = self.consecutive_redundant + 1 if result.is_redundant else 0
 
         self._update_totals(result)
+        if result.statement_coverage.total > 0 or result.branch_coverage.total > 0:
+            self._structural_totals_known = True
         self._update_statement_intersection(result)
         self._update_branch_intersection(result)
+
+    def seed_totals(self, total_statements: int, total_branches: int) -> None:
+        """Set static CFG totals before the first testcase executes."""
+        self._total_statements = max(0, int(total_statements))
+        self._total_branches = max(0, int(total_branches))
+        self._structural_totals_known = True
 
     def metrics(self, tests: list[TestResult]) -> CoverageMetrics:
         """Return frozen summary suitable for serialisation and reporting."""
@@ -231,10 +240,11 @@ class CoverageState:
         return result
 
     def _update_totals(self, result: TestResult) -> None:
-        if result.statement_coverage.total > 0:
-            self._total_statements = result.statement_coverage.total
-        if result.branch_coverage.total > 0:
-            self._total_branches = result.branch_coverage.total
+        if not self._structural_totals_known:
+            if result.statement_coverage.total > 0:
+                self._total_statements = result.statement_coverage.total
+            if result.branch_coverage.total > 0:
+                self._total_branches = result.branch_coverage.total
         self._best_statement_visited = max(self._best_statement_visited, result.statement_coverage.visited)
         self._best_branch_visited = max(self._best_branch_visited, result.branch_coverage.visited)
 

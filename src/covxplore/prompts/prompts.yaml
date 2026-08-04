@@ -19,13 +19,10 @@ sections:
       For a branch, state that exact nodeId (condition text) and required TRUE or FALSE polarity.
       Do not invent nodeIds from line numbers.
 
-    STEP 2 — Predict the expected path:
-      List the ordered branch outcomes (nodeId + TRUE/FALSE) from function entry up to and including
-      the target decision. This is the expected_path vector you submit with the candidate.
-      Prefer a SHORT path (1–4 BRANCH decisions). Only include conditions this test body actually forces.
-      The last step must be a BRANCH nodeId from the catalog/gap (not a line number, not a statement nodeId).
-      When covering an uncovered statement (e.g. return false), target the last BRANCH decision that
-      enables reaching that statement — do not put statement nodeIds in expected_path.
+    STEP 2 — Predict the complete expected path:
+      List every branch evaluation in exact runtime order from function entry through the target.
+      Include intermediate decisions and repeated loop evaluations; never shorten the path.
+      Use catalog nodeIds only. The last step is the targeted branch and polarity.
 
     STEP 3 — Determine concrete input values:
       Work out exact numeric, pointer, or struct values needed to force that path.
@@ -45,10 +42,10 @@ sections:
     Remaining budget: {remaining_batches} batches.
 
     Do not generate a test that repeats same reached statement or branch path already covered by a passing test.
-    Do not output final DONE line until statement and branch coverage targets are met. If uncovered items remain, call execute_testcase_batch.
+    Return one candidate batch for the remaining uncovered items; the Flow executes it after validation.
 
   self_reflection: |
-    After every call to execute_testcase_batch, reflect on result before proceeding:
+    Use prior batch feedback from coverage guidance before producing the next batch:
 
     IF status == COMPILE_ERROR:
       - Read error log carefully.
@@ -57,12 +54,6 @@ sections:
     IF status == FAILED or RUNTIME_ERROR:
       - Read execute_log and fix blocking issue.
       - Continue coverage-driven generation.
-
-    IF PATH DIVERGENCE is reported:
-      - Your expected_path disagreed with the runtime branch outcomes at the first mismatched step.
-      - Re-examine input/state that controls the divergent condition; do not reuse the same expected_path.
-      - Shorten the path to the first reachable decision if control never reached later steps.
-      - If nodeId is not in the BRANCH NODE CATALOG, replace it with a real [nodeId=N] from catalog/gap.
 
     IF is_redundant == True:
       - Do not re-submit same or similar test / same expected_path.
@@ -91,12 +82,10 @@ sections:
       int AKA_AI_result = clamp(AKA_AI_x, AKA_AI_lo, AKA_AI_hi);
 
   output_format: |
-    OUTPUT FORMAT for candidates submitted to execute_testcase_batch or execute_testcase:
+    OUTPUT FORMAT for the structured candidates array returned to the Flow:
 
-    Each candidate MUST include a non-empty expected_path (ordered nodeId + TRUE/FALSE from
-    function entry to the target). Do not submit candidates with expected_path=[].
-    node_id values MUST come from [nodeId=…] tags in the BRANCH NODE CATALOG or coverage guidance —
-    never from line numbers.
+    expected_path must contain every runtime branch evaluation in exact order through the target,
+    including repeated loop evaluations. Use catalog nodeIds only; never abbreviate the path.
 
       expected_path: [
         {"node_id": 12, "polarity": "TRUE"},
@@ -105,8 +94,8 @@ sections:
       target_node_id / target_polarity: last expected_path step (auto-filled from expected_path if omitted)
 
     Within one batch, candidates MUST have distinct expected_path vectors.
-    If path A is a proper prefix of path B, only B is kept (A is skipped as dominated).
-    Already-covered targets are skipped before execution.
+    If path A is a proper prefix of path B, only B is kept because executing the complete longer path
+    necessarily evaluates every branch outcome in A. Already-covered targets are skipped before execution.
 
     The test_body argument must be raw C++ code that will be inserted verbatim into
     AkaUT's generated test harness. Rules:
@@ -129,32 +118,31 @@ sections:
 
 workflows:
   unlimited_batch: >-
-    Plan one batch for this session and call execute_testcase_batch exactly once:
-    one candidate per useful uncovered statement or branch side plus boundary/error cases.
-    Avoid duplicate path shapes. No search/source tools are available in this variant;
-    use preloaded source and coverage feedback.
+    Return one structured batch for this session: one candidate per useful uncovered
+    statement or branch side plus boundary/error cases. Avoid duplicate path shapes.
+    No search/source tools are available in this variant; use preloaded source and coverage feedback.
   no_search: >-
-    Plan one batch for this session and call execute_testcase_batch exactly once with 3-5 focused test bodies.
-    No search/source tools are available in this variant; use only the preloaded source and coverage feedback.
+    Return one structured batch with 3-5 focused test candidates. No search/source tools
+    are available in this variant; use only the preloaded source and coverage feedback.
   no_path: >-
-    Plan one batch for this session and call execute_testcase_batch exactly once with 3-5 focused test bodies.
-    Do NOT submit expected_path (leave it empty / omit). Focus only on covering statement and branch gaps.
-    No search/source tools are available; use preloaded source and coverage feedback.
+    Return one structured batch with 3-5 focused test candidates. Omit expected_path or
+    leave it empty. Focus only on statement and branch gaps. No search/source tools are available.
   search: |-
-    Preloaded context is complete for the first batch. Do NOT call search/source tools to verify or expand it.
-    Call execute_testcase_batch exactly once with 3-5 focused test bodies. Search only in a later session after an execution error identifies a missing symbol or contract.
+    Preloaded context is complete for the first batch. Do NOT call search/source tools to
+    verify or expand it. Return one structured batch with 3-5 focused test candidates.
+    Search only when prior execution feedback identifies a missing symbol or contract.
 
 coverage:
   no_tests: >-
     No tests executed yet. Execute a first compilable test case to assess statement and branch coverage.
   compile_error: >-
-    Last execution status is COMPILE_ERROR. Coverage is not complete. Do NOT stop. Fix compilation issues and re-run execute_testcase.
+    Last execution status is COMPILE_ERROR. Fix the reported compilation issue in the next candidate batch.
   failed: >-
-    Last execution status is FAILED. Coverage is not complete. Inspect execute_log and continue with the next test.
+    Last execution status is FAILED. Inspect execute_log and return a corrected candidate in the next batch.
   unknown: >-
-    Last execution status is UNKNOWN. Coverage state may be incomplete. Inspect execute_log, then re-run with a valid test and continue.
+    Last execution status is UNKNOWN. Coverage may be incomplete; inspect execute_log and return a valid replacement candidate.
   success: >-
-    SUCCESS! All coverage targets are now met (statement, branch). DO NOT call any more tools. Please output your final 'DONE: ...' message immediately to finish the task.
+    SUCCESS! All statement and branch coverage targets are already met; the Flow will stop before requesting another batch.
   detail_unavailable: "{label} coverage: {pct}% — uncovered {label_lower} details unavailable from backend payload."
   detail_header: "{label} coverage: {pct}% — {count} {label_lower}(s) not yet executed by any test:"
   max_statement_lines: 15
@@ -168,8 +156,8 @@ task:
     Workflow:
     Use preloaded context and source as ground truth.
     {workflow}
-    Prefer execute_testcase_batch with 3-5 focused test bodies{path_requirement}; use fewer only when fewer useful candidates remain.
-    Stop after the batch result and output DONE. The Flow will relaunch a fresh session with updated coverage feedback if more work remains.
+    Return 3-5 focused test candidates{path_requirement}; use fewer only when fewer useful candidates remain.
+    Return only the structured batch. The Flow validates, executes, and relaunches a fresh session with updated coverage feedback when needed.
   context: |
     FUNCTION CONTEXT:
 

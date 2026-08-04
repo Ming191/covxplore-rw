@@ -40,14 +40,10 @@ class GenerateTestAction(BaseModel):
         ...,
         min_length=1,
         description=(
-            "REQUIRED ordered vector of predicted branch outcomes from function entry up to "
-            "and including the target decision, e.g. "
-            "[{\"node_id\": 12, \"polarity\": \"TRUE\"}, {\"node_id\": 19, \"polarity\": \"FALSE\"}]. "
-            "Do NOT leave this empty. The last step is the coverage target "
-            "(target_node_id/target_polarity are auto-filled from it when omitted). "
-            "Only include decisions this test body actually forces. After execution, the first "
-            "step whose predicted polarity was NOT observed at runtime is reported back as a "
-            "path divergence — use that to see exactly where your prediction was wrong."
+            "Complete branch trace from function entry through the target in exact runtime order, "
+            "e.g. [{\"node_id\": 12, \"polarity\": \"TRUE\"}, "
+            "{\"node_id\": 19, \"polarity\": \"FALSE\"}]. Include intermediate and repeated "
+            "loop evaluations; never shorten it. Use catalog node_ids only. The last step is the target."
         ),
     )
 

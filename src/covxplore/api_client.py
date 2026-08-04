@@ -53,6 +53,8 @@ class ConditionInfo:
 class NodeConditionsResult:
     absolute_path: str
     total_conditions: int
+    total_statements: int | None
+    total_branches: int | None
     conditions: list[ConditionInfo]
 
 
@@ -184,6 +186,12 @@ class AkaUTClient:
         return NodeConditionsResult(
             absolute_path=data.get("absolutePath") or absolute_path,
             total_conditions=int(data.get("totalConditions") or len(conditions)),
+            total_statements=(
+                int(data["totalStatements"]) if data.get("totalStatements") is not None else None
+            ),
+            total_branches=(
+                int(data["totalBranches"]) if data.get("totalBranches") is not None else None
+            ),
             conditions=conditions,
         )
 

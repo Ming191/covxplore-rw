@@ -5,45 +5,37 @@ from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, crew, task
 from crewai.tools import BaseTool
 
+from covxplore.agents.schemas import (
+    GenerateTestBatchAction,
+    GenerateTestBatchAnyAction,
+    GenerateTestBatchOptionalPathAction,
+    GenerateTestBatchSingleAction,
+)
 from covxplore.config import get_settings
 from covxplore.llm import build_llm
 from covxplore.prompts.builder import PromptBuilder
-from covxplore.tools import (
-    ExecuteTestcaseBatchAnyTool,
-    ExecuteTestcaseBatchOptionalPathTool,
-    ExecuteTestcaseBatchSingleTool,
-    ExecuteTestcaseBatchTool,
-    ExecuteTestcaseTool,
-    GetNodeSourceTool,
-    SearchNodesTool,
-)
+from covxplore.tools import GetNodeSourceTool, SearchNodesTool
 from covxplore.tools.execute_testcase import RunContext
 
 
-def _guard(ctx: RunContext, start_batch: int, max_forces: int = 3):
-    forced = 0
-
+def _validate_batch_json(schema):
     def check(output):
-        nonlocal forced
-        suite = ctx.active_suite()
-        if suite is not None and suite.batch_count > start_batch:
-            return True, output
-        if forced >= max_forces:
-            return True, output
-
-        forced += 1
-        ctx.lock_discovery()
-        return False, (
-            "Final answer emitted before executing this session's batch. "
-            "Discovery is now disabled; call execute_testcase_batch exactly once."
-        )
+        text = getattr(output, "raw", output)
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end < start:
+            return False, "Return one JSON object with a candidates array."
+        try:
+            batch = schema.model_validate_json(text[start : end + 1])
+        except Exception as exc:
+            return False, f"Invalid candidate batch: {exc}"
+        return True, batch.model_dump_json()
 
     return check
 
 
 @CrewBase
 class TestGenerationCrew:
-    """One-session crew for statement/branch coverage-driven test generation."""
+    """One-session crew that returns a validated batch for Flow execution."""
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
@@ -54,16 +46,14 @@ class TestGenerationCrew:
     def __init__(
         self,
         tools: list[BaseTool],
+        batch_schema: type,
         llm: LLM | str | None = None,
         agent_max_iter: int = 3,
-        start_batch: int = 0,
-        run_context: RunContext | None = None,
         reasoning: bool | None = None,
         max_reasoning_attempts: int | None = None,
     ):
         self._tools = tools
-        self._run_context = run_context
-        self._start_batch = start_batch
+        self._batch_schema = batch_schema
 
         if agent_max_iter <= 0:
             raise ValueError("agent_max_iter must be > 0")
@@ -77,7 +67,7 @@ class TestGenerationCrew:
             else max_reasoning_attempts
         )
 
-        if isinstance(llm, LLM):
+        if llm is not None and not isinstance(llm, str):
             self._llm = llm
         else:
             self._llm = build_llm(llm)
@@ -95,15 +85,10 @@ class TestGenerationCrew:
 
     @task
     def generate_tests(self) -> Task:
-        guardrail = (
-            _guard(self._run_context, self._start_batch)
-            if self._run_context is not None
-            else None
-        )
         return Task(
             config=self.tasks_config["generate_tests"],  # type: ignore[index]
-            guardrail=guardrail,
-            guardrail_max_retries=3,
+            guardrail=_validate_batch_json(self._batch_schema),
+            guardrail_max_retries=1,
         )
 
     @crew
@@ -118,6 +103,16 @@ class TestGenerationCrew:
         )
 
 
+def batch_types(prompt_config):
+    if not prompt_config.require_expected_path:
+        return GenerateTestBatchOptionalPathAction
+    if prompt_config.unlimited_batch:
+        return GenerateTestBatchAnyAction
+    if prompt_config.max_batch_candidates <= 1:
+        return GenerateTestBatchSingleAction
+    return GenerateTestBatchAction
+
+
 def build_crew(
     prompt_config,  # PromptConfig
     *,
@@ -126,17 +121,9 @@ def build_crew(
     run_context: RunContext,
     reasoning: bool | None = None,
 ) -> tuple["TestGenerationCrew", PromptBuilder]:
+    del start_batch
     builder = PromptBuilder(prompt_config)
-
-    if not prompt_config.require_expected_path:
-        batch_tool = ExecuteTestcaseBatchOptionalPathTool
-    elif prompt_config.unlimited_batch:
-        batch_tool = ExecuteTestcaseBatchAnyTool
-    elif prompt_config.max_batch_candidates <= 1:
-        batch_tool = ExecuteTestcaseBatchSingleTool
-    else:
-        batch_tool = ExecuteTestcaseBatchTool
-    tools = [batch_tool(run_context=run_context)]
+    tools: list[BaseTool] = []
     if prompt_config.search_tools:
         tools.extend([
             GetNodeSourceTool(run_context=run_context),
@@ -145,9 +132,8 @@ def build_crew(
 
     crew_inst = TestGenerationCrew(
         tools=tools,
+        batch_schema=batch_types(prompt_config),
         agent_max_iter=agent_max_iter,
-        start_batch=start_batch,
-        run_context=run_context,
         reasoning=reasoning,
     )
     return crew_inst, builder

@@ -329,10 +329,8 @@ class ExecuteTestcaseBatchTool(BaseTool):
                 contract_ok.append(candidate)
 
         preflight = filter_preflight_candidates(suite, contract_ok)
-        async_results = await asyncio.gather(
-            *(self._execute_one(suite.function_path, candidate) for candidate in preflight.executable)
-        )
-        results.extend(async_results)
+        for candidate in preflight.executable:
+            results.append(await self._execute_one(suite.function_path, candidate))
 
         summary = merge_batch_results(
             suite, results, cfg.min_suite_size, preflight_notes=preflight.notes

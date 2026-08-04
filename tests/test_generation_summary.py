@@ -23,7 +23,7 @@ def test_summary_contract_minimal_keys_and_token_total_sum():
 
     summary = result.to_summary_dict()
 
-    assert {"run_id", "function_path", "prompt_variant", "stop_reason", "metrics", "test_suite"} <= set(summary)
+    assert {"run_id", "function_path", "prompt_variant", "context_version", "stop_reason", "metrics", "test_suite"} <= set(summary)
     assert summary["metrics"]["total_input_tokens"] == 11
     assert summary["metrics"]["total_output_tokens"] == 13
     assert summary["metrics"]["total_tokens"] == 24

@@ -38,11 +38,7 @@ class StopPolicy:
         if suite.batch_count == 0:
             return False
         metrics = suite.coverage.metrics(suite.tests)
-        if (
-            require_structural_totals
-            and metrics.total_statements == 0
-            and metrics.total_branches == 0
-        ):
+        if require_structural_totals and not suite.coverage._structural_totals_known:
             return False
         statement_done = metrics.total_statements == 0 or metrics.covered_statements >= metrics.total_statements
         branch_done = metrics.total_branches == 0 or metrics.covered_branches >= metrics.total_branches
@@ -58,7 +54,7 @@ class StopPolicy:
         return None
 
     def terminal_reason(self, suite) -> StopReason:
-        if self.coverage_target_reached(suite):
+        if self.coverage_target_reached(suite, require_structural_totals=True):
             return "coverage_target"
         if suite.coverage.consecutive_redundant >= self.redundant_streak_limit:
             return "redundant_streak"

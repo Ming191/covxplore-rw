@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
 
     # Generation loop
+    context_version: str = "v1"
     max_batches: int = 15
     # DeepSeek V4 defaults to reasoning_effort="high" (thinking mode always on unless
     # explicitly disabled), and the model's internal "thinking" tokens are billed against

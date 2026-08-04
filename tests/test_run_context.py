@@ -459,6 +459,34 @@ class TestExecuteTestcaseBatchTool:
         assert [test.test_name for test in suite.tests] == ["first", "bad"]
         assert suite.tests[-1].status == TestStatus.COMPILE_ERROR.value
 
+    def test_batch_executes_candidates_sequentially(self):
+        class Executor:
+            def __init__(self):
+                self.active = 0
+                self.max_active = 0
+                self.calls = []
+
+            def execute(self, absolute_path: str, test_body: str, test_name: str | None = None):
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                self.calls.append(test_name)
+                self.active -= 1
+                return ExecuteResult(raw={"testName": test_name, "status": "PASSED"})
+
+        ctx = RunContext()
+        ctx.reset_suite("/x.cpp::f()", "run-1")
+        executor = Executor()
+
+        ExecuteTestcaseBatchTool(run_context=ctx, executor=executor)._run(
+            [
+                {"test_body": "a();", "test_name": "a", "expected_path": _EP},
+                {"test_body": "b();", "test_name": "b", "expected_path": [{"node_id": 2, "polarity": "TRUE"}]},
+            ]
+        )
+
+        assert executor.calls == ["a", "b"]
+        assert executor.max_active == 1
+
     def test_batch_reports_failed_logs_per_test_name(self):
         class Executor:
             def execute(self, absolute_path: str, test_body: str, test_name: str | None = None):

@@ -25,8 +25,7 @@ class TestResult(BaseModel):
     target_polarity: str | None = None
     target_reason: str | None = None
     # Predicted branch-outcome trace from function entry to the target (see
-    # ExpectedPathStep); compared against unvisited_branches after execution to
-    # detect *where* the LLM's prediction diverged from the real runtime path.
+    # ExpectedPathStep); compared against trace_summary's ordered runtime path.
     expected_path: list[ExpectedPathStep] = Field(default_factory=list)
 
     new_structural_coverage: int = 0

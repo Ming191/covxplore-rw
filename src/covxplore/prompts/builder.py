@@ -60,9 +60,9 @@ class PromptBuilder:
         from covxplore.types import TestSuite
 
         batch_hint = (
-            "Prefer execute_testcase_batch with exactly 1 focused test body"
+            "Return exactly 1 focused test candidate"
             if self.config.max_batch_candidates <= 1
-            else "Prefer execute_testcase_batch with 3-5 focused test bodies"
+            else "Return 3-5 focused test candidates"
         )
         parts = [
             catalog_text("task", "description").format(
@@ -78,7 +78,7 @@ class PromptBuilder:
         # Override the default "3-5" wording when single-candidate ablation is on.
         if self.config.max_batch_candidates <= 1:
             parts[0] = parts[0].replace(
-                "Prefer execute_testcase_batch with 3-5 focused test bodies",
+                "Return 3-5 focused test candidates",
                 batch_hint,
             )
 

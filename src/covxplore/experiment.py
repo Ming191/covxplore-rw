@@ -19,6 +19,7 @@ def flat_row(result: GenerationResult) -> dict:
         "run_id": result.config.run_id,
         "function_path": result.config.function_path,
         "prompt_variant": result.config.prompt_variant,
+        "context_version": result.config.context_version,
         "stop_reason": result.stop_reason,
         "statement_coverage_pct": round(metrics.statement_pct, 4),
         "branch_coverage_pct": round(metrics.branch_pct, 4),

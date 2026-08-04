@@ -34,6 +34,10 @@ def run_generation() -> None:
         help="Directory to write the summary JSON. Defaults to current directory.",
     )
     parser.add_argument(
+        "--context-version", choices=("v1", "v2"), default=None,
+        help="Static function context provider (default: Settings.context_version).",
+    )
+    parser.add_argument(
         "--max-batches", type=int, default=None,
         help="Override max batches (default: Settings.max_batches).",
     )
@@ -57,6 +61,7 @@ def run_generation() -> None:
     exp_cfg = GenerationConfig(
         function_path=args.path,
         prompt_variant=variant,
+        context_version=args.context_version or cfg.context_version,
         max_batches=args.max_batches if args.max_batches is not None else cfg.max_batches,
         reasoning=args.reasoning if args.reasoning is not None else cfg.agent_reasoning,
     )

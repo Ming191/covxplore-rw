@@ -2,6 +2,6 @@ generate_tests:
   description: >
     {task_description}
   expected_output: >
-    Exactly one execute_testcase_batch tool call, then output exactly:
-    DONE: <n> candidates proposed
+    One valid JSON object matching the configured batch schema. Return no markdown,
+    code fences, comments, or prose outside the object.
   agent: test_generator

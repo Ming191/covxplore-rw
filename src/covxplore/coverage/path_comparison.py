@@ -6,7 +6,6 @@ from typing import Sequence
 from covxplore.types.expected_path_step import ExpectedPathStep
 from covxplore.types.test_result import TestResult
 from covxplore.types.trace_summary import RuntimeValue, TargetFunctionConditionStep
-from covxplore.types.unvisited_branch import UnvisitedBranch
 
 _MAX_RUNTIME_OPERANDS = 4
 _MAX_RENDERED_VALUE_CHARS = 80
@@ -14,17 +13,12 @@ _MAX_RENDERED_VALUE_CHARS = 80
 
 @dataclass
 class PathComparison:
-    """Result of walking a predicted branch-outcome path against one test's actual run.
-
-    ``matched`` is ``None`` when the candidate carried no target/expected_path at all (nothing
-    to compare), ``True`` when every predicted step was corroborated, and ``False`` when the walk
-    stopped at ``divergence_index`` because that step's predicted polarity was not observed.
-    """
+    """Ordered comparison of a predicted path against one test's runtime trace."""
 
     matched: bool | None
     divergence_index: int | None = None
     divergence_step: ExpectedPathStep | None = None
-    observed_branch: UnvisitedBranch | None = None
+    observed_step: TargetFunctionConditionStep | None = None
 
 
 def path_signature(path: Sequence[ExpectedPathStep]) -> tuple[tuple[int, str], ...]:
@@ -47,10 +41,6 @@ def is_proper_path_prefix(
     shorter: Sequence[tuple[int, str]] | Sequence[ExpectedPathStep],
     longer: Sequence[tuple[int, str]] | Sequence[ExpectedPathStep],
 ) -> bool:
-    """True when ``shorter`` is a proper prefix of ``longer`` (ordered path A ⊂ path B).
-
-    Accepts either ``ExpectedPathStep`` sequences or already-computed ``path_signature`` tuples.
-    """
     short_sig = _as_path_signature(shorter)
     long_sig = _as_path_signature(longer)
     return bool(short_sig) and len(short_sig) < len(long_sig) and long_sig[: len(short_sig)] == short_sig
@@ -61,7 +51,6 @@ def polarity_to_bool(polarity: str) -> bool:
 
 
 def effective_expected_path(result: TestResult) -> list[ExpectedPathStep]:
-    """The path to compare against: ``expected_path`` if given, else the single legacy target."""
     if result.expected_path:
         return list(result.expected_path)
     if result.target_node_id is not None and result.target_polarity is not None:
@@ -75,7 +64,6 @@ def expected_path_from_action(
     target_node_id: int | None = None,
     target_polarity: str | None = None,
 ) -> list[ExpectedPathStep]:
-    """Build the effective path from an action/candidate before a TestResult exists."""
     if expected_path:
         return list(expected_path)
     if target_node_id is not None and target_polarity is not None:
@@ -83,49 +71,43 @@ def expected_path_from_action(
     return []
 
 
+def ordered_runtime_path(result: TestResult) -> list[TargetFunctionConditionStep]:
+    """Return evaluated target-function conditions in execution order."""
+    if result.trace_summary is None:
+        return []
+    return [
+        step
+        for step in result.trace_summary.target_function_condition_steps
+        if step.node_id is not None and _step_polarity(step) is not None
+    ]
+
+
+def runtime_path_contains(result: TestResult, step: ExpectedPathStep) -> bool:
+    return any(
+        observed.node_id == step.node_id and _step_polarity(observed) == step.polarity
+        for observed in ordered_runtime_path(result)
+    )
+
+
 def compare_expected_path(
     result: TestResult,
     *,
     known_node_ids: set[int] | None = None,
 ) -> PathComparison:
-    """Find the first predicted step not corroborated by this single test's own trace.
-
-    ``result.unvisited_branches`` is scoped to this one execution, not cumulative suite
-    coverage: a node_id's absence from it means BOTH polarities were observed by this run
-    (fully covered on its own, e.g. a loop body); presence with the predicted side unset means
-    that side was not observed this run — either the condition took the other branch, or
-    control flow never reached it at all (both true_visited and false_visited are False).
-
-    When ``known_node_ids`` is provided (BRANCH catalog), a step whose node_id is outside
-    that set is treated as an immediate divergence — typically the model confused a source
-    line number for a CFG nodeId.
-    """
-    path = effective_expected_path(result)
-    if not path:
+    """Compare expected_path with the ordered runtime trace, with no coverage fallback."""
+    expected = effective_expected_path(result)
+    if not expected:
         return PathComparison(matched=None)
 
-    observed_by_node = {
-        branch.node_id: branch for branch in result.unvisited_branches if branch.node_id is not None
-    }
-    for index, step in enumerate(path):
-        if known_node_ids is not None and step.node_id not in known_node_ids:
-            return PathComparison(
-                matched=False,
-                divergence_index=index,
-                divergence_step=step,
-                observed_branch=None,
-            )
-        branch = observed_by_node.get(step.node_id)
-        if branch is None:
-            continue
-        observed = branch.true_visited if step.polarity == "TRUE" else branch.false_visited
-        if not observed:
-            return PathComparison(
-                matched=False,
-                divergence_index=index,
-                divergence_step=step,
-                observed_branch=branch,
-            )
+    actual = ordered_runtime_path(result)
+    for index, predicted in enumerate(expected):
+        if known_node_ids is not None and predicted.node_id not in known_node_ids:
+            return PathComparison(False, index, predicted)
+        if index >= len(actual):
+            return PathComparison(False, index, predicted)
+        observed = actual[index]
+        if observed.node_id != predicted.node_id or _step_polarity(observed) != predicted.polarity:
+            return PathComparison(False, index, predicted, observed)
     return PathComparison(matched=True)
 
 
@@ -134,14 +116,13 @@ def format_divergence(
     *,
     known_node_ids: set[int] | None = None,
 ) -> str | None:
-    """Human-readable divergence explanation for the agent, or ``None`` if nothing diverged."""
     comparison = compare_expected_path(result, known_node_ids=known_node_ids)
     if comparison.matched is not False:
         return None
 
     path = effective_expected_path(result)
     step = comparison.divergence_step
-    branch = comparison.observed_branch
+    observed = comparison.observed_step
     assert step is not None and comparison.divergence_index is not None
 
     prior = " → ".join(f"node{s.node_id}={s.polarity}" for s in path[: comparison.divergence_index])
@@ -152,36 +133,40 @@ def format_divergence(
             "nodeId is not in the BRANCH NODE CATALOG (do not use source line numbers as nodeId; "
             "copy [nodeId=N] from the catalog/gap)"
         )
-    elif branch is not None and not branch.true_visited and not branch.false_visited:
-        observed_desc = (
-            "the condition was never evaluated in this run (control flow did not reach it) — "
-            "shorten the path and change inputs so earlier decisions lead here"
-        )
-    elif branch is not None:
-        observed_only = "TRUE" if branch.true_visited else "FALSE"
-        observed_desc = (
-            f"the condition only evaluated {observed_only} in this run, not {step.polarity} — "
-            f"adjust the input that controls this decision and keep the same nodeId"
-        )
+    elif observed is None:
+        observed_desc = "the ordered runtime trace ended before this condition was evaluated"
     else:
-        observed_desc = f"the predicted outcome ({step.polarity}) was not observed in this run"
+        observed_desc = (
+            f"runtime evaluated node {observed.node_id}={_step_polarity(observed)} instead — "
+            "adjust the predicted order or the input controlling this decision"
+        )
 
-    condition_text = f' ("{branch.condition}")' if branch and branch.condition else ""
-    runtime_desc = _format_runtime_operands(result, step, branch)
+    runtime_desc = _format_runtime_operands(result, step, observed)
     runtime_sentence = f" runtime operands: {runtime_desc}." if runtime_desc else ""
     return (
         f"Predicted path diverged at step {comparison.divergence_index + 1}/{len(path)} "
-        f"(node {step.node_id}{condition_text}, predicted {step.polarity}): {prefix}{observed_desc}."
+        f"(node {step.node_id}, predicted {step.polarity}): {prefix}{observed_desc}."
         f"{runtime_sentence}"
     )
+
+
+def _step_polarity(step: TargetFunctionConditionStep) -> str | None:
+    value = step.branch if step.branch is not None else step.condition_value
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, str):
+        normalized = value.strip().upper()
+        if normalized in {"TRUE", "FALSE"}:
+            return normalized
+    return None
 
 
 def _format_runtime_operands(
     result: TestResult,
     step: ExpectedPathStep,
-    branch: UnvisitedBranch | None,
+    observed: TargetFunctionConditionStep | None,
 ) -> str | None:
-    steps = _matching_condition_steps(result, step, branch)
+    steps = _matching_condition_steps(result, step, observed)
     values = _latest_runtime_values(steps)
     if not values:
         return None
@@ -192,37 +177,16 @@ def _format_runtime_operands(
 def _matching_condition_steps(
     result: TestResult,
     step: ExpectedPathStep,
-    branch: UnvisitedBranch | None,
+    observed: TargetFunctionConditionStep | None,
 ) -> list[TargetFunctionConditionStep]:
     if not result.trace_summary:
         return []
     condition_steps = result.trace_summary.target_function_condition_steps
-    by_node = [s for s in condition_steps if s.node_id == step.node_id]
+    by_node = [candidate for candidate in condition_steps if candidate.node_id == step.node_id]
     if _latest_runtime_values(by_node):
         return by_node
-    if branch is None:
-        return by_node
-
-    # AkaUT emits operand snapshots immediately before evaluation of an instrumented
-    # subcondition. CFG branch IDs can point at an adjacent decision node instead.
-    by_offset = [
-        s
-        for s in condition_steps
-        if s.start == branch.start_offset
-        and s.end == branch.end_offset
-        and (branch.line_in_function is None or s.line == branch.line_in_function)
-    ]
-    if _latest_runtime_values(by_offset):
-        return by_offset
-
-    same_line = [
-        s
-        for s in condition_steps
-        if branch.line_in_function is not None
-        and s.line == branch.line_in_function
-    ]
-    if _latest_runtime_values(same_line):
-        return same_line
+    if observed is not None and observed.runtime_values:
+        return [observed]
     return by_node
 
 

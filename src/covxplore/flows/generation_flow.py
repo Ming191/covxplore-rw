@@ -10,11 +10,19 @@ from rich.console import Console
 from covxplore.crews.test_generation.crew import build_crew
 from covxplore.generation.prompt_context import StaticPromptData, fetch_static_prompt_data
 from covxplore.generation.runtime_session import GenerationFlowState, GenerationRuntimeSession, TestSuiteCodec
+from covxplore.generation.token_diagnostics import LLMTokenRecorder
 from covxplore.generation.stop_reasons import StopReason
 from covxplore.generation.tokens import totals_from_usage_metrics
 from covxplore.observability import init_observability, trace_observation
 from covxplore.prompts.registry import get_variant
-from covxplore.tools.execute_testcase import HardStop
+from covxplore.crews.test_generation.crew import batch_types
+from covxplore.tools.execute_testcase import (
+    ExecuteTestcaseBatchAnyTool,
+    ExecuteTestcaseBatchOptionalPathTool,
+    ExecuteTestcaseBatchSingleTool,
+    ExecuteTestcaseBatchTool,
+    HardStop,
+)
 
 _console = Console()
 
@@ -25,7 +33,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
         self,
         *,
         crew_builder: Callable = build_crew,
-        static_fetcher: Callable[[str], StaticPromptData] = fetch_static_prompt_data,
+        static_fetcher: Callable[[str, str], StaticPromptData] = fetch_static_prompt_data,
         console: Console | None = None,
         **kwargs,
     ):
@@ -41,8 +49,16 @@ class GenerationFlow(Flow[GenerationFlowState]):
         config = _config_from_dict(self.state.config)
         session = GenerationRuntimeSession(config)
         suite = session.open(self._console)
-        static_prompt = self._static_fetcher(config.function_path)
+        static_prompt = self._static_fetcher(
+            config.function_path,
+            config.context_version,
+        )
         self.state.static_prompt = _dump_static_prompt(static_prompt)
+        if static_prompt.total_statements is not None and static_prompt.total_branches is not None:
+            suite.coverage.seed_totals(
+                static_prompt.total_statements,
+                static_prompt.total_branches,
+            )
         self.state.suite = session.suite_codec.dump_suite(suite)
         self.state.token_ledger = session.token_ledger.to_dict()
         self.state.dynamic_knowledge = {}
@@ -69,6 +85,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
             crew_inst = None
             crew = None
             tracing_url = None
+            token_recorder = LLMTokenRecorder()
             try:
                 crew_inst, builder = self._crew_builder(
                     prompt_config,
@@ -102,7 +119,9 @@ class GenerationFlow(Flow[GenerationFlowState]):
                 session.run_context.include_exec_detail = prompt_config.include_exec_detail
                 session.run_context.max_batch_candidates = prompt_config.max_batch_candidates
                 crew = crew_inst.crew()
-                crew.kickoff(inputs=inputs)
+                output = crew.kickoff(inputs=inputs)
+                batch = _structured_batch(output, batch_types(prompt_config))
+                _batch_tool(prompt_config, session.run_context)._run(batch.candidates)
             except HardStop as exc:
                 stop_reason = exc.reason  # type: ignore[assignment]
                 error_message = None
@@ -117,6 +136,10 @@ class GenerationFlow(Flow[GenerationFlowState]):
                     self._console.print(f"[red]Error: {error_message}[/]")
                     traceback.print_exc()
             finally:
+                try:
+                    self.state.llm_interactions.extend(token_recorder.close())
+                except Exception as exc:
+                    self._console.print(f"[yellow]LLM diagnostics unavailable: {exc}[/]")
                 session.record_crew_run(crew or crew_inst, tracing_url)
                 suite = session.active_suite()
                 if stop_reason == "agent_done":
@@ -149,7 +172,7 @@ class GenerationFlowRunner:
         self,
         *,
         crew_builder: Callable = build_crew,
-        static_fetcher: Callable[[str], StaticPromptData] = fetch_static_prompt_data,
+        static_fetcher: Callable[[str, str], StaticPromptData] = fetch_static_prompt_data,
         console: Console | None = None,
     ):
         self._crew_builder = crew_builder
@@ -197,6 +220,32 @@ class GenerationFlowRunner:
         raise NotImplementedError("Flow resume CLI wiring is not implemented yet")
 
 
+def _structured_batch(output, schema):
+    batch = getattr(output, "json_dict", None) or getattr(output, "pydantic", None)
+    if batch is None:
+        tasks = getattr(output, "tasks_output", None) or []
+        if tasks:
+            batch = getattr(tasks[-1], "json_dict", None) or getattr(
+                tasks[-1], "pydantic", None
+            )
+    if batch is None:
+        raw = getattr(output, "raw", output)
+        batch = schema.model_validate_json(raw)
+    return schema.model_validate(batch)
+
+
+def _batch_tool(prompt_config, run_context):
+    if not prompt_config.require_expected_path:
+        tool = ExecuteTestcaseBatchOptionalPathTool
+    elif prompt_config.unlimited_batch:
+        tool = ExecuteTestcaseBatchAnyTool
+    elif prompt_config.max_batch_candidates <= 1:
+        tool = ExecuteTestcaseBatchSingleTool
+    else:
+        tool = ExecuteTestcaseBatchTool
+    return tool(run_context=run_context)
+
+
 def _knowledge_text(knowledge: dict[str, str]) -> str | None:
     if not knowledge:
         return None
@@ -211,6 +260,8 @@ def _dump_static_prompt(data: StaticPromptData) -> dict:
         "source_text": data.source_text,
         "branch_catalog_text": data.branch_catalog_text,
         "branch_catalog_ids": list(data.branch_catalog_ids),
+        "total_statements": data.total_statements,
+        "total_branches": data.total_branches,
     }
 
 
@@ -220,6 +271,12 @@ def _load_static_prompt(data: dict) -> StaticPromptData:
         source_text=data.get("source_text", ""),
         branch_catalog_text=data.get("branch_catalog_text", ""),
         branch_catalog_ids=[int(node_id) for node_id in data.get("branch_catalog_ids") or []],
+        total_statements=(
+            int(data["total_statements"]) if data.get("total_statements") is not None else None
+        ),
+        total_branches=(
+            int(data["total_branches"]) if data.get("total_branches") is not None else None
+        ),
     )
 
 
@@ -229,6 +286,7 @@ def _config_from_dict(data: dict):
     return GenerationConfig(
         function_path=data["function_path"],
         prompt_variant=data["prompt_variant"],
+        context_version=data.get("context_version", "v1"),
         max_batches=int(data["max_batches"]),
         redundant_streak_limit=int(data["redundant_streak_limit"]),
         fail_streak_limit=int(data["fail_streak_limit"]),

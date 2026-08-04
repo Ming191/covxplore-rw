@@ -11,34 +11,27 @@ from typing import Iterable, Sequence
 from covxplore.coverage.path_comparison import (
     compare_expected_path,
     effective_expected_path,
-    polarity_to_bool,
+    runtime_path_contains,
 )
+from covxplore.status import TestStatus, normalize_test_status
 from covxplore.types.test_result import TestResult
 
 
 def _path_bearing(results: Iterable[TestResult]) -> list[TestResult]:
-    return [result for result in results if effective_expected_path(result)]
+    return [
+        result
+        for result in results
+        if effective_expected_path(result)
+        and normalize_test_status(result.status) in {TestStatus.PASSED, TestStatus.RUNTIME_ERROR}
+    ]
 
 
 def target_hit(result: TestResult) -> bool | None:
-    """Whether this run observed the final expected_path / target polarity."""
+    """Whether the ordered runtime trace contains the requested target outcome."""
     path = effective_expected_path(result)
     if not path:
         return None
-    target = path[-1]
-    want_true = polarity_to_bool(target.polarity)
-    for branch in result.unvisited_branches:
-        if branch.node_id != target.node_id:
-            continue
-        observed = branch.true_visited if want_true else branch.false_visited
-        # Target hit if polarity observed OR node absent from unvisited (both sides seen).
-        if observed:
-            return True
-        if not branch.true_visited and not branch.false_visited:
-            return False
-        return False
-    # Node not listed as unvisited ⇒ both sides observed this run ⇒ target side hit.
-    return True
+    return runtime_path_contains(result, path[-1])
 
 
 def compute_path_understanding_metrics(

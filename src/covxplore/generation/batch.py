@@ -195,14 +195,14 @@ async def async_execute_candidates(
     candidates: list[TestcaseCandidate],
     executor: TestCaseExecutor,
 ):
-    return await asyncio.gather(
-        *(
-            asyncio.to_thread(
+    results = []
+    for candidate in candidates:
+        results.append(
+            await asyncio.to_thread(
                 executor.execute,
                 function_path,
                 candidate.test_body,
                 candidate.test_name,
             )
-            for candidate in candidates
         )
-    )
+    return results

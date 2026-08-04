@@ -237,3 +237,16 @@ class TestPromptBuilderTaskDescription:
         assert "No search/source tools are available" in text
         assert "preloaded source" in text
         assert "search_nodes then get_node_source" not in text
+
+    def test_path_prompt_requires_complete_exact_runtime_sequence(self):
+        builder = PromptBuilder(PromptConfig("path"))
+
+        system = builder.system_prompt()
+        task = builder.task_description(function_path="/x.cpp::f()")
+        text = system + "\n" + task
+
+        assert "List every branch evaluation" in text
+        assert "repeated loop evaluations" in text
+        assert "never shorten the path" in text
+        assert "Prefer a SHORT path" not in text
+        assert "Shorten the path" not in text

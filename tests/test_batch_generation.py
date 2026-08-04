@@ -58,16 +58,29 @@ def test_merge_orders_by_structural_gain():
     assert summary.rejected_redundant == [small]
 
 
-def test_async_execute_candidates_uses_sync_executor_in_threads():
+def test_async_execute_candidates_runs_sync_executor_sequentially():
     class Executor:
-        def __init__(self): self.calls = []
+        def __init__(self):
+            self.calls = []
+            self.active = 0
+            self.max_active = 0
+
         def execute(self, absolute_path, test_body, test_name=None):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
             self.calls.append((absolute_path, test_body, test_name))
+            self.active -= 1
             return ExecuteResult(raw={"testName": test_name, "status": "PASSED"})
+
     executor = Executor()
-    results = asyncio.run(async_execute_candidates("/f.cpp::f()", [TestcaseCandidate("a();", "A")], executor))
-    assert [result.test_name for result in results] == ["A"]
-    assert executor.calls == [("/f.cpp::f()", "a();", "A")]
+    candidates = [TestcaseCandidate("a();", "A"), TestcaseCandidate("b();", "B")]
+    results = asyncio.run(async_execute_candidates("/f.cpp::f()", candidates, executor))
+    assert [result.test_name for result in results] == ["A", "B"]
+    assert executor.calls == [
+        ("/f.cpp::f()", "a();", "A"),
+        ("/f.cpp::f()", "b();", "B"),
+    ]
+    assert executor.max_active == 1
 
 
 def test_preflight_dedupes_identical_expected_paths_in_batch():
