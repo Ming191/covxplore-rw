@@ -27,24 +27,18 @@ class PromptBuilder:
 
     def system_prompt(self) -> str:
         sections = list(self.config.enabled_sections())
-        # Keep CoT/format for coverage-only wording when path is off; only swap
-        # path-specific output_format text via a soft instruction (do not strip sections).
-        parts = [
-            catalog_text("sections", section)
-            for section in _STATIC_SECTIONS
-            if section in sections
-        ]
-        if not self.config.require_expected_path:
-            # Soften path requirements that remain inside shared YAML sections.
-            parts.append(
-                "Focus on covering uncovered statements and branches. "
-                "Do not predict expected_path; leave expected_path empty."
-            )
-        elif not self.config.path_feedback:
-            parts.append(
-                "Still submit expected_path with each candidate, but path-match "
-                "diagnostics will not be shown after execution — rely on coverage gaps."
-            )
+        parts: list[str] = []
+        for section in _STATIC_SECTIONS:
+            if section not in sections:
+                continue
+            if not self.config.require_expected_path and section in {
+                "role_persona",
+                "cot_reasoning",
+                "output_format",
+            }:
+                parts.append(catalog_text("sections", f"{section}_no_path"))
+            else:
+                parts.append(catalog_text("sections", section))
         return self._join(parts) if parts else ""
 
     def task_description(
@@ -120,20 +114,9 @@ class PromptBuilder:
             )
 
         if self.config.self_reflection:
-            reflection = catalog_text("sections", "self_reflection")
-            if not self.config.path_feedback:
-                # Drop PATH DIVERGENCE repair instructions when feedback is ablated.
-                filtered = [
-                    line
-                    for line in reflection.splitlines()
-                    if "PATH DIVERGENCE" not in line
-                    and "expected_path disagreed" not in line
-                    and "divergent condition" not in line
-                    and "Shorten the path" not in line
-                    and "BRANCH NODE CATALOG, replace" not in line
-                ]
-                reflection = "\n".join(filtered)
-            parts.append(reflection)
+            parts.append(catalog_text("sections", "self_reflection"))
+        if self.config.require_expected_path and self.config.path_feedback:
+            parts.append(catalog_text("path_feedback", "repair"))
 
         return self._join(parts)
 

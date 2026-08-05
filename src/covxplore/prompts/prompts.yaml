@@ -10,26 +10,24 @@ sections:
     Never use source line numbers as nodeId — line+N and nodeId are different integers.
     Before the first batch, use only the BRANCH NODE CATALOG (not guessed line numbers).
 
+  role_persona_no_path: |
+    You are a senior C/C++ verification engineer.
+    Your sole objective is to maximize statement and branch coverage for target function with a minimal, non-redundant test suite.
+    You write correct, compilable C++ test driver bodies and reason carefully about data types and pointer semantics before writing code.
+    When branch metadata is available, distinguish branches by catalog nodeId and polarity; never use source line numbers as nodeId.
+
   cot_reasoning: |
-    Before writing each test body, reason through these steps:
+    Before writing each test body:
+    1. Select an uncovered target by catalog nodeId and polarity.
+    2. Predict every branch evaluation in exact runtime order from entry through the target.
+       Include intermediate and repeated loop evaluations; never shorten the path.
+    3. Choose concrete input/state that forces the path, then write the test body.
 
-    STEP 1 — Identify an uncovered target:
-      Choose an uncovered statement or branch from coverage guidance by its [nodeId=N] tag,
-      or from the BRANCH NODE CATALOG when gaps are still empty.
-      For a branch, state that exact nodeId (condition text) and required TRUE or FALSE polarity.
-      Do not invent nodeIds from line numbers.
-
-    STEP 2 — Predict the complete expected path:
-      List every branch evaluation in exact runtime order from function entry through the target.
-      Include intermediate decisions and repeated loop evaluations; never shorten the path.
-      Use catalog nodeIds only. The last step is the targeted branch and polarity.
-
-    STEP 3 — Determine concrete input values:
-      Work out exact numeric, pointer, or struct values needed to force that path.
-      Check boundary conditions, null pointers, and control-flow prerequisites.
-
-    STEP 4 — Write the test body:
-      Declare all input variables, call the function, and capture return value or observable side effect.
+  cot_reasoning_no_path: |
+    Before writing each test body:
+    1. Select an uncovered statement or branch from coverage guidance.
+    2. Choose concrete input/state that reaches it, then write the test body.
+    Do not output expected_path or target metadata.
 
   coverage_guidance: |
     COVERAGE GUIDANCE:
@@ -41,8 +39,8 @@ sections:
       Branch    : {branch_pct}%
     Remaining budget: {remaining_batches} batches.
 
-    Do not generate a test that repeats same reached statement or branch path already covered by a passing test.
-    Return one candidate batch for the remaining uncovered items; the Flow executes it after validation.
+    Avoid candidates with zero expected marginal coverage. Covered prefix branches are allowed when
+    required to reach a new target. Return one batch for the remaining gaps.
 
   self_reflection: |
     Use prior batch feedback from coverage guidance before producing the next batch:
@@ -82,20 +80,10 @@ sections:
       int AKA_AI_result = clamp(AKA_AI_x, AKA_AI_lo, AKA_AI_hi);
 
   output_format: |
-    OUTPUT FORMAT for the structured candidates array returned to the Flow:
+    Return one JSON object with a candidates array. Each path-aware candidate must include a complete,
+    exact expected_path using catalog nodeIds; the final step is the target. Example:
 
-    expected_path must contain every runtime branch evaluation in exact order through the target,
-    including repeated loop evaluations. Use catalog nodeIds only; never abbreviate the path.
-
-      expected_path: [
-        {"node_id": 12, "polarity": "TRUE"},
-        {"node_id": 19, "polarity": "FALSE"}
-      ]
-      target_node_id / target_polarity: last expected_path step (auto-filled from expected_path if omitted)
-
-    Within one batch, candidates MUST have distinct expected_path vectors.
-    If path A is a proper prefix of path B, only B is kept because executing the complete longer path
-    necessarily evaluates every branch outcome in A. Already-covered targets are skipped before execution.
+      {"candidates":[{"test_name":"tc_f_node19_false_001","test_body":"int AKA_AI_x = 1; int AKA_AI_result = f(AKA_AI_x);","expected_path":[{"node_id":12,"polarity":"TRUE"},{"node_id":19,"polarity":"FALSE"}]}]}
 
     The test_body argument must be raw C++ code that will be inserted verbatim into
     AkaUT's generated test harness. Rules:
@@ -115,6 +103,22 @@ sections:
       // Target: x > 0 → TRUE branch
       int AKA_AI_x = 5;
       int AKA_AI_result = myFunc(AKA_AI_x);
+
+  output_format_no_path: |
+    Return one JSON object with a candidates array. Each candidate contains test_name and test_body;
+    omit expected_path and target metadata. Example:
+
+      {"candidates":[{"test_name":"tc_f_001","test_body":"int AKA_AI_x = 1; int AKA_AI_result = f(AKA_AI_x);"}]}
+
+    The test_body argument must be raw C++ code inserted verbatim into AkaUT's generated harness:
+    1. Do not include #include directives, main(), namespaces, class/struct definitions, or assertions.
+    2. Declare required local variables, prefix input variable names with AKA_AI_, and call the exact function signature.
+    3. Qualify focal namespace symbols explicitly. Return no markdown or prose outside the JSON object.
+
+path_feedback:
+  repair: >-
+    On PATH DIVERGENCE, preserve the confirmed runtime prefix, correct the first mismatch or its
+    controlling input, and regenerate the complete exact path through the target; never shorten it.
 
 workflows:
   unlimited_batch: >-

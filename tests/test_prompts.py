@@ -12,6 +12,7 @@ from covxplore.prompts.registry import (
     get_leave_one_out_variants,
     get_variant,
 )
+from covxplore.types import TestSuite
 
 
 def test_prompt_catalog_contains_all_sections_and_templates():
@@ -19,12 +20,16 @@ def test_prompt_catalog_contains_all_sections_and_templates():
 
     assert set(catalog["sections"]) == {
         "role_persona",
+        "role_persona_no_path",
         "cot_reasoning",
+        "cot_reasoning_no_path",
         "coverage_guidance",
         "self_reflection",
         "few_shot_examples",
         "output_format",
+        "output_format_no_path",
     }
+    assert set(catalog["path_feedback"]) == {"repair"}
     assert set(catalog["workflows"]) == {"unlimited_batch", "no_search", "no_path", "search"}
     assert set(catalog["coverage"]) == {
         "no_tests",
@@ -245,8 +250,46 @@ class TestPromptBuilderTaskDescription:
         task = builder.task_description(function_path="/x.cpp::f()")
         text = system + "\n" + task
 
-        assert "List every branch evaluation" in text
+        assert "Predict every branch evaluation" in text
         assert "repeated loop evaluations" in text
         assert "never shorten the path" in text
         assert "Prefer a SHORT path" not in text
         assert "Shorten the path" not in text
+
+    def test_no_path_prompt_has_no_path_instructions_or_metadata(self):
+        builder = PromptBuilder(PromptConfig("no-path", require_expected_path=False))
+
+        text = builder.system_prompt()
+
+        assert "Do not output expected_path or target metadata" in text
+        assert "omit expected_path and target metadata" in text
+        assert "Predict every branch evaluation" not in text
+        assert "path-aware candidate" not in text
+        assert "Copy that N into expected_path" not in text
+        assert "#include directives, main()" in text
+        assert "prefix input variable names with AKA_AI_" in text
+        assert "call the exact function signature" in text
+        assert "assertions" in text
+        assert '{"candidates":[{"test_name":"tc_f_001"' in text
+
+    def test_path_feedback_repair_is_only_in_feedback_variant(self):
+        with_feedback = PromptBuilder(PromptConfig("ours", path_feedback=True))
+        without_feedback = PromptBuilder(PromptConfig("without", path_feedback=False))
+
+        feedback_task = with_feedback.task_description(function_path="/x.cpp::f()")
+        no_feedback_task = without_feedback.task_description(function_path="/x.cpp::f()")
+
+        assert "preserve the confirmed runtime prefix" in feedback_task
+        assert "preserve the confirmed runtime prefix" not in no_feedback_task
+
+    def test_coverage_guidance_allows_covered_prefixes(self):
+        builder = PromptBuilder(PromptConfig("coverage"))
+
+        text = builder.task_description(
+            function_path="/x.cpp::f()",
+            suite=TestSuite(function_path="/x.cpp::f()"),
+            remaining_batches=3,
+        )
+
+        assert "Covered prefix branches are allowed" in text
+        assert "repeats same reached statement or branch path" not in text
