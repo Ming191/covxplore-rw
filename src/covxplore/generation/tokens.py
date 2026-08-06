@@ -30,25 +30,16 @@ class TokenTotals:
 @dataclass
 class TokenLedger:
     crew: TokenTotals = field(default_factory=TokenTotals)
-    trace: TokenTotals = field(default_factory=TokenTotals)
     chosen: TokenTotals = field(default_factory=TokenTotals)
-    source: Literal["none", "crew", "trace"] = "none"
+    source: Literal["none", "crew"] = "none"
 
     def record_crew(self, crew_inst) -> None:
         self.crew.add(totals_from_crew(crew_inst))
-
-    def record_trace(self, trace_id: str | None) -> None:
-        from covxplore.observability import fetch_trace_token_totals
-
-        self.trace.add(fetch_trace_token_totals(trace_id))
 
     def finalize_suite(self, suite) -> TokenTotals:
         if self.crew.total > 0:
             self.chosen = TokenTotals(self.crew.prompt, self.crew.completion)
             self.source = "crew"
-        elif self.trace.total > 0:
-            self.chosen = TokenTotals(self.trace.prompt, self.trace.completion)
-            self.source = "trace"
         else:
             self.chosen = TokenTotals()
             self.source = "none"
@@ -58,7 +49,6 @@ class TokenLedger:
     def to_dict(self) -> dict:
         return {
             "crew": self.crew.to_dict(),
-            "trace": self.trace.to_dict(),
             "chosen": self.chosen.to_dict(),
             "source": self.source,
         }
@@ -68,7 +58,6 @@ class TokenLedger:
         data = data or {}
         ledger = cls()
         ledger.crew = _totals_from_dict(data.get("crew"))
-        ledger.trace = _totals_from_dict(data.get("trace"))
         ledger.chosen = _totals_from_dict(data.get("chosen"))
         ledger.source = data.get("source") or "none"
         return ledger
@@ -110,21 +99,18 @@ def totals_from_usage_metrics(metrics) -> TokenTotals:
 
 
 def reconcile_suite_tokens(suite, totals: TokenTotals) -> None:
-    if suite.total_input_tokens > 0 or suite.total_output_tokens > 0:
-        return
-    if totals.total == 0:
+    if suite.total_input_tokens > 0 or suite.total_output_tokens > 0 or totals.total == 0:
         return
     eligible = [
-        t
-        for t in suite.tests
-        if t.status in {TestStatus.PASSED.value, TestStatus.RUNTIME_ERROR.value}
+        test
+        for test in suite.tests
+        if test.status in {TestStatus.PASSED.value, TestStatus.RUNTIME_ERROR.value}
     ]
     if not eligible:
         return
 
-    n = len(eligible)
-    base_in, rem_in = divmod(totals.prompt, n)
-    base_out, rem_out = divmod(totals.completion, n)
-    for i, t in enumerate(eligible):
-        t.token_input = base_in + (rem_in if i == n - 1 else 0)
-        t.token_output = base_out + (rem_out if i == n - 1 else 0)
+    base_in, rem_in = divmod(totals.prompt, len(eligible))
+    base_out, rem_out = divmod(totals.completion, len(eligible))
+    for index, test in enumerate(eligible):
+        test.token_input = base_in + (rem_in if index == len(eligible) - 1 else 0)
+        test.token_output = base_out + (rem_out if index == len(eligible) - 1 else 0)

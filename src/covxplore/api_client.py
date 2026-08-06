@@ -165,7 +165,7 @@ class AkaUTClient:
         *,
         coverage_type: str = "BRANCH",
     ) -> NodeConditionsResult:
-        """Static CFG condition catalog. Prefer ``BRANCH`` for expected_path nodeIds."""
+        """Return static structural coverage metadata and condition details."""
         absolute_path = absolute_path.replace("\\", "/")
         data = self._get(
             "/api/node/conditions",

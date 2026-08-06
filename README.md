@@ -1,62 +1,48 @@
 # Covxplore
 
-Covxplore is a multi-agent system for automated C/C++ test case generation, targeting statement and branch coverage. It leverages an iterative loop to perform ablation studies on prompts, identifying the most effective prompting techniques and components.
+Covxplore generates C/C++ test drivers with one CrewAI agent and compares five reasoning treatments under fixed context, coverage-gap, execution-feedback, and batch infrastructure.
 
 ## Installation
 
-Ensure you have Python >=3.10 <3.14 installed on your system. This project uses [UV](https://docs.astral.sh/uv/) for dependency management and package handling.
-
-First, if you haven't already, install uv:
+Python 3.10–3.13 and [uv](https://docs.astral.sh/uv/) are required.
 
 ```bash
-pip install uv
+uv sync
+uv run pytest
 ```
 
-Make sure the project dependencies are installed (e.g., via `uv sync` or `uv pip install -e .` depending on your setup).
+Generation also requires the AkaUT API, defaulting to `http://localhost:8080`.
 
 ## Configuration
 
-**Add your LLM API key (like `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`) into the`.env` file** depending on the configuration you are currently using.
+Set `LLM_PROVIDER=deepseek` with `DEEPSEEK_API_KEY`, or use `LLM_PROVIDER=local` with an OpenAI-compatible `LOCAL_BASE_URL` and `LOCAL_MODEL`.
 
-## CLI Commands
+## CLI
 
-Covxplore provides the following main CLI entry points:
-
-### `covxplore-gen`
-
-Run a single test generation for one function with one prompt variant.
-
-**Example:**
 ```bash
-covxplore-gen \
-    --path "/project/src/foo.cpp\MyNS::bar(int)" \
-    --variant full \
-    --out results/
+# One function, one treatment
+uv run covxplore-gen \
+  --path "/project/src/foo.cpp::MyNS::bar(int)" \
+  --variant none \
+  --out results
+
+# All treatments, repeated
+uv run covxplore-ablate \
+  --path "/project/src/foo.cpp::MyNS::bar(int)" \
+  --repeat 3 \
+  --out results
+
+# Selected treatments
+uv run covxplore-ablate \
+  --path "/project/src/foo.cpp::MyNS::bar(int)" \
+  --variants none cot least_to_most tree_of_thoughts program_of_thoughts
+
+# Multiple functions, one absolute path per line
+uv run covxplore-pipeline \
+  --paths-file functions.txt \
+  --workers 3 \
+  --repeat 3 \
+  --out results
 ```
 
-**Options:**
-- `--path`, `-p`: Absolute path of the function node (as returned by `/api/search`). *(Required)*
-- `--variant`, `-v`: Prompt variant name (default: value from `Settings.default_prompt_variant`).
-- `--out`, `-o`: Directory to write the summary JSON. Defaults to current directory.
-- `--max-batches`: Override max batch count setting.
-
-### `covxplore-ablate`
-
-Run the full ablation matrix (all or selected variants, N repeats).
-
-**Example:**
-```bash
-covxplore-ablate \
-    --path "/project/src/foo.cpp\MyNS::bar(int)" \
-    --variants full no_cot no_coverage baseline \
-    --repeat 3 \
-    --out results/
-```
-
-**Options:**
-- `--path`, `-p`: Absolute path of the function node. *(Required)*
-- `--variants`: Variant names to include. Defaults to all variants.
-- `--repeat`, `-r`: Number of times to repeat the evaluations.
-- `--out`, `-o`: Directory to write the results. Defaults to `results`.
-
-*Note: The legacy `crewai run`, `train`, `replay`, and `test` commands are deprecated and unsupported in Covxplore v0.2. Please use the CLI endpoints defined above.*
+Available treatments: `none`, `cot`, `least_to_most`, `tree_of_thoughts`, and `program_of_thoughts`.

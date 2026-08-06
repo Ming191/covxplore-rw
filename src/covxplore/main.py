@@ -41,15 +41,6 @@ def run_generation() -> None:
         "--max-batches", type=int, default=None,
         help="Override max batches (default: Settings.max_batches).",
     )
-    parser.add_argument(
-        "--reasoning", dest="reasoning", action="store_true", default=None,
-        help="Enable the agent's reasoning/thinking step before each task "
-             "(prints 'Reasoning Started/Completed' panels; default: Settings.agent_reasoning).",
-    )
-    parser.add_argument(
-        "--no-reasoning", dest="reasoning", action="store_false",
-        help="Disable the agent's reasoning/thinking step, overriding Settings.agent_reasoning.",
-    )
     args = parser.parse_args()
 
     from covxplore.config import get_settings
@@ -63,7 +54,6 @@ def run_generation() -> None:
         prompt_variant=variant,
         context_version=args.context_version or cfg.context_version,
         max_batches=args.max_batches if args.max_batches is not None else cfg.max_batches,
-        reasoning=args.reasoning if args.reasoning is not None else cfg.agent_reasoning,
     )
 
     result = generate(exp_cfg)
@@ -91,27 +81,16 @@ def run_ablation() -> None:
         "--variants", nargs="+", default=None,
         help="Variant names to include. Defaults to all variants.",
     )
-    parser.add_argument(
-        "--leave-one-out", "--loo",
-        action="store_true",
-        help="Run leave-one-out preset: full, full_shots, and all variants starting with 'no_'.",
-    )
     parser.add_argument("--repeat", "-r", type=int, default=None)
     parser.add_argument("--out", "-o", default="results")
     args = parser.parse_args()
 
     from covxplore.ablation import AblationRunner
-    from covxplore.prompts.registry import get_leave_one_out_variants
-
-    if args.leave_one_out and args.variants:
-        parser.error("Use either --variants or --leave-one-out, not both.")
-
-    variants = get_leave_one_out_variants() if args.leave_one_out else args.variants
 
     runner = AblationRunner()
     results = runner.run_matrix(
         function_path=args.path,
-        variants=variants,
+        variants=args.variants,
         repeat=args.repeat,
     )
     runner.export_results(results, Path(args.out))
@@ -145,16 +124,6 @@ def run_parallel() -> None:
         help="Prompt variant names to run. Defaults to all variants.",
     )
     parser.add_argument(
-        "--leave-one-out", "--loo",
-        action="store_true",
-        help="Run leave-one-out preset: full, full_shots, and all variants starting with 'no_'.",
-    )
-    parser.add_argument(
-        "--q1-ablation",
-        action="store_true",
-        help="Run Q1 mechanism ablation preset (ours + wo_* variants).",
-    )
-    parser.add_argument(
         "--repeat", "-r", type=int, default=None,
         help="Repetitions per variant. Defaults to Settings.ablation_repeat.",
     )
@@ -165,23 +134,11 @@ def run_parallel() -> None:
     args = parser.parse_args()
 
     from covxplore.pipeline import ParallelPipeline
-    from covxplore.prompts.registry import get_leave_one_out_variants, get_q1_ablation_variants
-
-    mode_flags = sum(bool(x) for x in (args.leave_one_out, args.q1_ablation, args.variants))
-    if mode_flags > 1:
-        parser.error("Use only one of --variants, --leave-one-out, or --q1-ablation.")
-
-    if args.q1_ablation:
-        variants = get_q1_ablation_variants()
-    elif args.leave_one_out:
-        variants = get_leave_one_out_variants()
-    else:
-        variants = args.variants
 
     pipeline = ParallelPipeline(
         paths_file=Path(args.paths_file),
         out_dir=Path(args.out),
-        variants=variants,
+        variants=args.variants,
         repeat=args.repeat,
         max_workers=args.workers,
     )

@@ -12,70 +12,66 @@ from covxplore.generation.deepseek_thinking import DeepSeekThinkingInterceptor
 
 @dataclass(frozen=True)
 class LLMConfig:
-    provider_name: str
     model: str
     api_key: str
     base_url: str
+    stream: bool = False
 
 
 class LLMProvider(ABC):
-    """Factory abstraction for provider-specific CrewAI LLM configuration."""
-
     name: str
 
     @abstractmethod
-    def resolve(self, cfg: Any, model: str | None = None) -> LLMConfig:
-        """Return provider-specific LLM construction values."""
+    def resolve(self, settings: Any, model: str | None = None) -> LLMConfig: ...
 
-    def build(self, cfg: Any, model: str | None = None) -> LLM:
-        llm_cfg = self.resolve(cfg, model)
+    def build(self, settings: Any, model: str | None = None) -> LLM:
+        config = self.resolve(settings, model)
+        thinking = self.name == "deepseek" and settings.llm_thinking is True
         return LLM(
-            model=llm_cfg.model,
-            api_key=llm_cfg.api_key,
-            base_url=llm_cfg.base_url,
-            max_tokens=cfg.max_tokens,
-            temperature=cfg.llm_temperature,
+            model=config.model,
+            api_key=config.api_key,
+            base_url=config.base_url,
+            max_tokens=settings.max_tokens,
+            temperature=settings.llm_temperature,
+            timeout=settings.llm_timeout_sec,
+            max_retries=settings.llm_max_retries,
+            seed=settings.llm_seed,
+            stream=config.stream,
             additional_params={"extra_body": {"thinking": {"type": "enabled"}}}
-            if cfg.llm_thinking and llm_cfg.provider_name == "DeepSeek"
+            if thinking
             else {},
-            interceptor=DeepSeekThinkingInterceptor()
-            if cfg.llm_thinking and llm_cfg.provider_name == "DeepSeek"
-            else None,
+            interceptor=DeepSeekThinkingInterceptor() if thinking else None,
         )
 
 
 class DeepSeekProvider(LLMProvider):
     name = "deepseek"
 
-    def resolve(self, cfg: Any, model: str | None = None) -> LLMConfig:
-        resolved = (model or cfg.deepseek_model).strip()
-        resolved = resolved if "/" in resolved else f"deepseek/{resolved}"
+    def resolve(self, settings: Any, model: str | None = None) -> LLMConfig:
+        resolved = (model or settings.deepseek_model).strip()
         return LLMConfig(
-            provider_name="DeepSeek",
-            model=resolved,
-            api_key=cfg.deepseek_api_key,
-            base_url=cfg.deepseek_base_url,
+            model=resolved if "/" in resolved else f"deepseek/{resolved}",
+            api_key=settings.deepseek_api_key,
+            base_url=settings.deepseek_base_url,
         )
 
 
-class KimchiProvider(LLMProvider):
-    name = "kimchi"
+class LocalProvider(LLMProvider):
+    name = "local"
 
-    def resolve(self, cfg: Any, model: str | None = None) -> LLMConfig:
-        resolved = (model or cfg.kimchi_model).strip()
-        # Kimchi exposes an OpenAI-compatible endpoint, so use LiteLLM's OpenAI provider.
-        resolved = resolved if "/" in resolved else f"openai/{resolved}"
+    def resolve(self, settings: Any, model: str | None = None) -> LLMConfig:
+        resolved = (model or settings.local_model).strip()
         return LLMConfig(
-            provider_name="Kimchi",
-            model=resolved,
-            api_key=cfg.kimchi_api_key,
-            base_url=cfg.kimchi_base_url,
+            model=resolved if "/" in resolved else f"openai/{resolved}",
+            api_key=settings.local_api_key,
+            base_url=settings.local_base_url,
+            stream=True,
         )
 
 
 _PROVIDERS: dict[str, LLMProvider] = {
-    DeepSeekProvider.name: DeepSeekProvider(),
-    KimchiProvider.name: KimchiProvider(),
+    "deepseek": DeepSeekProvider(),
+    "local": LocalProvider(),
 }
 
 
@@ -84,10 +80,11 @@ def get_llm_provider(name: str | None) -> LLMProvider:
     try:
         return _PROVIDERS[provider_name]
     except KeyError as exc:
-        available = ", ".join(sorted(_PROVIDERS))
-        raise ValueError(f"Unsupported LLM provider '{name}'. Available providers: {available}") from exc
+        raise ValueError(
+            f"Unsupported LLM provider {name!r}. Available: {', '.join(_PROVIDERS)}"
+        ) from exc
 
 
 def build_llm(model: str | None = None) -> LLM:
-    cfg = get_settings()
-    return get_llm_provider(cfg.llm_provider).build(cfg, model)
+    settings = get_settings()
+    return get_llm_provider(settings.llm_provider).build(settings, model)

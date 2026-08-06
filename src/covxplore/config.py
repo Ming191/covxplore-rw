@@ -22,41 +22,22 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_model: str = "deepseek/deepseek-v4-pro"
 
-    # Kimchi OpenAI-compatible endpoint
-    kimchi_api_key: str = ""
-    kimchi_base_url: str = "https://llm.kimchi.dev/openai/v1"
-    kimchi_model: str = "kimi-k2.6"
-
-    # Langfuse/OpenLIT observability
-    langfuse_enabled: bool = False
-    langfuse_host: str = "http://localhost:3000"
-    langfuse_public_key: str = ""
-    langfuse_secret_key: str = ""
+    # OpenAI-compatible local/custom endpoint
+    local_api_key: str = ""
+    local_base_url: str = "http://localhost:8000/v1"
+    local_model: str = "local-model"
 
     # Generation loop
     context_version: str = "v1"
     max_batches: int = 15
-    # DeepSeek V4 defaults to reasoning_effort="high" (thinking mode always on unless
-    # explicitly disabled), and the model's internal "thinking" tokens are billed against
-    # this same max_tokens budget as the final content/tool_calls. A low value here risks
-    # the response getting cut mid-thinking (finish_reason="length", content/tool_calls
-    # empty) before the model ever emits its actual answer — this hits doubly hard for
-    # CrewAI's own agent-level `reasoning` feature, since each reasoning attempt is itself
-    # an LLM call subject to the same truncation risk on top of the normal task calls.
+    # Provider thinking tokens share this budget with the structured response.
     max_tokens: int = 8000
     llm_temperature: float = 0.4
     llm_timeout_sec: int = 180
     llm_max_retries: int = 0
+    llm_seed: int | None = None
     llm_thinking: bool | None = None
-
-    # When enabled, the test_generator agent reflects and drafts a plan before executing
-    # each task (CrewAI's built-in "reasoning" feature). This is the toggle that surfaces
-    # the agent's chain-of-thought as "Reasoning Started/Completed" panels in the console
-    # (requires verbose=True, already the case for the crew/agent below).
-    agent_reasoning: bool = False
-    # Max reasoning refinement attempts before proceeding regardless of readiness.
-    # None means "keep refining until the agent reports ready".
-    agent_max_reasoning_attempts: int | None = None
+    prompt_version: str = "reasoning-v1"
 
     min_suite_size: int = 1  # keep at least this many tests even if redundant
     redundant_streak_limit: int = 3  # early-stop after N consecutive redundant tests
@@ -64,7 +45,7 @@ class Settings(BaseSettings):
     request_timeout_sec: int = 120  # per REST call
 
     # Ablation
-    default_prompt_variant: str = "full"
+    default_prompt_variant: str = "none"
     ablation_repeat: int = 3  # runs per variant per function
 
 

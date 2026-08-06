@@ -1,36 +1,31 @@
-from covxplore.agents.schemas import (
-    GenerateTestBatchAction,
-    GenerateTestBatchAnyAction,
-    GenerateTestBatchOptionalPathAction,
-    GenerateTestBatchSingleAction,
-)
-from covxplore.crews.test_generation.crew import _validate_batch_json, batch_types
-from covxplore.prompts.registry import get_variant
+from types import SimpleNamespace
+
+from covxplore.crews.test_generation.crew import TestGenerationCrew, _validate_batch
 
 
-def test_default_variant_uses_bounded_batch_schema():
-    assert batch_types(get_variant("ours")) is GenerateTestBatchAction
+def test_task_validates_json_without_native_response_format():
+    crew = TestGenerationCrew.__new__(TestGenerationCrew)
+    crew._llm = "fake"
+    crew.tasks_config = {"generate_tests": {"description": "task", "expected_output": "batch"}}
+    task = crew.generate_tests()
+    assert task.output_pydantic is None
+    assert task.output_json is None
+    assert task.guardrail is _validate_batch
 
 
-def test_ablation_variants_select_matching_batch_schema():
-    assert batch_types(get_variant("wo_batch")) is GenerateTestBatchSingleAction
-    assert batch_types(get_variant("no_search_unlimited")) is GenerateTestBatchAnyAction
-    assert batch_types(get_variant("wo_path")) is GenerateTestBatchOptionalPathAction
-
-
-def test_batch_guard_strips_prose_and_returns_validated_json():
-    ok, output = _validate_batch_json(GenerateTestBatchAction)(
-        'analysis before\n```json\n{"candidates":[{"test_body":"f();",'
-        '"expected_path":[{"node_id":1,"polarity":"TRUE"}]}]}\n```'
+def test_guardrail_returns_validated_canonical_json():
+    ok, result = _validate_batch(
+        SimpleNamespace(raw='{"candidates":[{"test_name":"t","test_body":"f();"}]}')
     )
-
     assert ok is True
-    assert output.startswith('{"candidates"')
-    assert "analysis before" not in output
+    assert '"test_body":"f();"' in result
 
 
-def test_batch_guard_rejects_invalid_payload_without_retry():
-    ok, message = _validate_batch_json(GenerateTestBatchAction)("no json")
-
+def test_guardrail_rejects_path_metadata():
+    ok, message = _validate_batch(
+        SimpleNamespace(
+            raw='{"candidates":[{"test_name":"t","test_body":"f();","expected_path":[]}]}'
+        )
+    )
     assert ok is False
-    assert message == "Return one JSON object with a candidates array."
+    assert "Extra inputs are not permitted" in message

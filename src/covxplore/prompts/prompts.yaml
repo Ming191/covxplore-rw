@@ -1,33 +1,9 @@
 separator: "\n\n────────────────────────────────────────────────────────────\n\n"
 
 sections:
-  role_persona: |
-    You are a senior C/C++ verification engineer.
-    Your sole objective is to maximize statement and branch coverage for target function with a minimal, non-redundant test suite.
-    You write correct, compilable C++ test driver bodies and reason carefully about data types and pointer semantics before writing code.
-    When branch metadata is available, refer to a branch by nodeId and polarity. The same condition text can appear at multiple nodeIds.
-    Gap lines and the BRANCH NODE CATALOG are tagged [nodeId=N]. Copy that N into expected_path / target_node_id.
-    Never use source line numbers as nodeId — line+N and nodeId are different integers.
-    Before the first batch, use only the BRANCH NODE CATALOG (not guessed line numbers).
-
-  role_persona_no_path: |
-    You are a senior C/C++ verification engineer.
-    Your sole objective is to maximize statement and branch coverage for target function with a minimal, non-redundant test suite.
-    You write correct, compilable C++ test driver bodies and reason carefully about data types and pointer semantics before writing code.
-    When branch metadata is available, distinguish branches by catalog nodeId and polarity; never use source line numbers as nodeId.
-
-  cot_reasoning: |
-    Before writing each test body:
-    1. Select an uncovered target by catalog nodeId and polarity.
-    2. Predict every branch evaluation in exact runtime order from entry through the target.
-       Include intermediate and repeated loop evaluations; never shorten the path.
-    3. Choose concrete input/state that forces the path, then write the test body.
-
-  cot_reasoning_no_path: |
-    Before writing each test body:
-    1. Select an uncovered statement or branch from coverage guidance.
-    2. Choose concrete input/state that reaches it, then write the test body.
-    Do not output expected_path or target metadata.
+  role: |
+    You are a senior C/C++ verification engineer. Maximize statement and branch coverage
+    with a minimal, non-redundant suite of compilable test driver bodies.
 
   coverage_guidance: |
     COVERAGE GUIDANCE:
@@ -39,114 +15,44 @@ sections:
       Branch    : {branch_pct}%
     Remaining budget: {remaining_batches} batches.
 
-    Avoid candidates with zero expected marginal coverage. Covered prefix branches are allowed when
-    required to reach a new target. Return one batch for the remaining gaps.
-
-  self_reflection: |
-    Use prior batch feedback from coverage guidance before producing the next batch:
-
-    IF status == COMPILE_ERROR:
-      - Read error log carefully.
-      - Fix identified syntax, type, argument, pointer, or member-access error only.
-
-    IF status == FAILED or RUNTIME_ERROR:
-      - Read execute_log and fix blocking issue.
-      - Continue coverage-driven generation.
-
-    IF is_redundant == True:
-      - Do not re-submit same or similar test / same expected_path.
-      - Choose a different uncovered statement or branch from coverage guidance.
-
-    IF Pre-execution skipped:
-      - That candidate's target/path was already covered or duplicated in the batch; pick a new gap.
-
-    IF status == PASSED and path matched:
-      - Move to next uncovered statement or branch.
-
-  few_shot_examples: |
-    EXAMPLES — branch-targeted C++ test driver bodies (NO ASSERTS):
-
-    --- Example: opposite branches of one condition ---
-    Function: int clamp(int x, int lo, int hi) { return (x < lo) ? lo : (x > hi) ? hi : x; }
-
-    Test 1 — TRUE branch:
-      // Target: x < lo → TRUE
-      int AKA_AI_x = -5, AKA_AI_lo = 0, AKA_AI_hi = 10;
-      int AKA_AI_result = clamp(AKA_AI_x, AKA_AI_lo, AKA_AI_hi);
-
-    Test 2 — FALSE branch:
-      // Target: x < lo → FALSE
-      int AKA_AI_x = 3, AKA_AI_lo = 0, AKA_AI_hi = 10;
-      int AKA_AI_result = clamp(AKA_AI_x, AKA_AI_lo, AKA_AI_hi);
+    Target remaining gaps and avoid candidates with zero expected marginal coverage.
 
   output_format: |
-    Return one JSON object with a candidates array. Each path-aware candidate must include a complete,
-    exact expected_path using catalog nodeIds; the final step is the target. Example:
+    Return one JSON object with a candidates array. Each candidate contains test_name and test_body.
+    Omit expected_path and target metadata.
 
-      {"candidates":[{"test_name":"tc_f_node19_false_001","test_body":"int AKA_AI_x = 1; int AKA_AI_result = f(AKA_AI_x);","expected_path":[{"node_id":12,"polarity":"TRUE"},{"node_id":19,"polarity":"FALSE"}]}]}
+    test_body is raw C++ inserted into AkaUT's harness:
+    1. Do not include headers, main(), namespace declarations, type definitions, or assertions.
+    2. Prefix input variable names with AKA_AI_.
+    3. Use the exact function signature and qualify namespace symbols.
 
-    The test_body argument must be raw C++ code that will be inserted verbatim into
-    AkaUT's generated test harness. Rules:
+reasoning_techniques:
+  none: |
+    Generate tests directly without an explicit reasoning or planning stage.
+  cot: |
+    Reason step by step from the focal code and coverage gaps to concrete input and state.
+  least_to_most: |
+    Decompose the remaining problem and solve prerequisite setup and simpler conditions before harder combinations.
+  tree_of_thoughts: |
+    Explore multiple feasible approaches, compare their expected coverage, and use the best ones.
+  program_of_thoughts: |
+    Translate focal logic into concise pseudocode and predicates, then solve them for concrete inputs.
 
-    1. DO NOT include: #include directives, main(), namespace declarations, or
-       class/struct definitions — the harness provides all.
-    2. DO declare all local variables needed by the test at the top.
-    3. USE the exact function name and argument types from the context.
-    4. QUALIFY focal namespace symbols explicitly. If context says namespace `Gson`, write `Gson::A`, `Gson::B`, `Gson::C(...)`, etc.; do not rely on `using namespace`.
-    5. THE VARIABLE NAMES in the test input data MUST start with AKA_AI_.
-    6. DO NOT ASSERT anything. You only need to provide test input data.
-         (NEVER use EXPECT_EQ, EXPECT_TRUE, or any other assert macros)
-    7. NAME your test to reflect the targeted condition and polarity, e.g.:
-         test_name="tc_bar_condX_true_001"
-
-    Example of a valid test body:
-      // Target: x > 0 → TRUE branch
-      int AKA_AI_x = 5;
-      int AKA_AI_result = myFunc(AKA_AI_x);
-
-  output_format_no_path: |
-    Return one JSON object with a candidates array. Each candidate contains test_name and test_body;
-    omit expected_path and target metadata. Example:
-
-      {"candidates":[{"test_name":"tc_f_001","test_body":"int AKA_AI_x = 1; int AKA_AI_result = f(AKA_AI_x);"}]}
-
-    The test_body argument must be raw C++ code inserted verbatim into AkaUT's generated harness:
-    1. Do not include #include directives, main(), namespaces, class/struct definitions, or assertions.
-    2. Declare required local variables, prefix input variable names with AKA_AI_, and call the exact function signature.
-    3. Qualify focal namespace symbols explicitly. Return no markdown or prose outside the JSON object.
-
-path_feedback:
-  repair: >-
-    On PATH DIVERGENCE, preserve the confirmed runtime prefix, correct the first mismatch or its
-    controlling input, and regenerate the complete exact path through the target; never shorten it.
-
-workflows:
-  unlimited_batch: >-
-    Return one structured batch for this session: one candidate per useful uncovered
-    statement or branch side plus boundary/error cases. Avoid duplicate path shapes.
-    No search/source tools are available in this variant; use preloaded source and coverage feedback.
-  no_search: >-
-    Return one structured batch with 3-5 focused test candidates. No search/source tools
-    are available in this variant; use only the preloaded source and coverage feedback.
-  no_path: >-
-    Return one structured batch with 3-5 focused test candidates. Omit expected_path or
-    leave it empty. Focus only on statement and branch gaps. No search/source tools are available.
-  search: |-
-    Preloaded context is complete for the first batch. Do NOT call search/source tools to
-    verify or expand it. Return one structured batch with 3-5 focused test candidates.
-    Search only when prior execution feedback identifies a missing symbol or contract.
+workflow: >-
+  Use the complete preloaded context, focal source, prior execution feedback, and current coverage gaps.
+  Return 3-5 focused candidates; use fewer only when fewer useful candidates remain.
 
 coverage:
   no_tests: >-
-    No tests executed yet. Execute a first compilable test case to assess statement and branch coverage.
+    No tests executed yet. Generate a first compilable batch to establish coverage.
   compile_error: >-
-    Last execution status is COMPILE_ERROR. Fix the reported compilation issue in the next candidate batch.
+    Last execution status is COMPILE_ERROR. Use prior execution feedback to correct it.
   failed: >-
-    Last execution status is FAILED. Inspect execute_log and return a corrected candidate in the next batch.
+    Last execution status is FAILED. Use prior execution feedback to correct it.
   unknown: >-
-    Last execution status is UNKNOWN. Coverage may be incomplete; inspect execute_log and return a valid replacement candidate.
+    Last execution status is UNKNOWN. Use prior execution feedback before replacing it.
   success: >-
-    SUCCESS! All statement and branch coverage targets are already met; the Flow will stop before requesting another batch.
+    All statement and branch coverage targets are met.
   detail_unavailable: "{label} coverage: {pct}% — uncovered {label_lower} details unavailable from backend payload."
   detail_header: "{label} coverage: {pct}% — {count} {label_lower}(s) not yet executed by any test:"
   max_statement_lines: 15
@@ -154,14 +60,12 @@ coverage:
 
 task:
   description: |
-    Generate test cases to maximise statement and branch coverage for the function at:
+    Generate test cases to maximise statement and branch coverage for:
       {function_path}
 
-    Workflow:
-    Use preloaded context and source as ground truth.
     {workflow}
-    Return 3-5 focused test candidates{path_requirement}; use fewer only when fewer useful candidates remain.
-    Return only the structured batch. The Flow validates, executes, and relaunches a fresh session with updated coverage feedback when needed.
+    Return 3-5 focused test candidates{path_requirement}.
+    Return only the structured batch; the Flow executes it and supplies updated feedback.
   context: |
     FUNCTION CONTEXT:
 
@@ -169,6 +73,4 @@ task:
   source: |
     FOCAL SOURCE:
 
-    {content}
-  branch_catalog: |
     {content}

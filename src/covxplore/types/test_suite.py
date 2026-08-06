@@ -29,10 +29,8 @@ class TestSuite:
 
     @property
     def redundancy_rate(self) -> float:
-        if not self.tests:
-            return 0.0
-        redundant = sum(1 for t in self.tests if t.is_redundant)
-        return redundant / len(self.tests)
+        candidates = len(self.tests) + len(self.rejected_tests)
+        return len(self.rejected_tests) / candidates if candidates else 0.0
 
     @property
     def total_input_tokens(self) -> int:
