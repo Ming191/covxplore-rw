@@ -10,8 +10,6 @@ from rich.console import Console
 from covxplore.ablation import AblationRunner
 from covxplore.experiment import flat_row
 
-_console = Console()
-
 
 def parse_function_paths(paths_file: Path) -> list[str]:
     """
@@ -65,23 +63,25 @@ class ParallelPipeline:
         variants: list[str] | None = None,
         repeat: int | None = None,
         max_workers: int = 3,
+        console: Console | None = None,
     ):
         self.paths_file = paths_file
         self.out_dir = out_dir
         self.variants = variants
         self.repeat = repeat
         self.max_workers = max_workers
+        self._console = console or Console()
 
     def run(self) -> Path:
         """Execute the parallel pipeline and return the path to the combined CSV."""
         function_paths = parse_function_paths(self.paths_file)
 
-        _console.rule(
+        self._console.rule(
             f"[bold]Pipeline: {len(function_paths)} functions, "
             f"max_workers={self.max_workers}[/]"
         )
         for fp in function_paths:
-            _console.print(f"  • {fp}")
+            self._console.print(f"  • {fp}")
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -90,7 +90,7 @@ class ParallelPipeline:
         with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_path = {
                 executor.submit(
-                    _run_one_process,
+                    ParallelPipeline._run_one,
                     function_path=fp,
                     out_dir=str(self.out_dir),
                     variants=self.variants,
@@ -103,43 +103,43 @@ class ParallelPipeline:
                 try:
                     rows = future.result()
                     all_rows.extend(rows)
-                    _console.print(f"[green][done][/] {fp}")
+                    self._console.print(f"[green][done][/] {fp}")
                 except Exception as exc:
-                    _console.print(f"[red][error][/] {fp}: {exc}")
+                    self._console.print(f"[red][error][/] {fp}: {exc}")
 
         summary_path = _write_pipeline_summary_rows(all_rows, self.out_dir)
-        _console.rule(f"[bold green]Pipeline complete[/]")
-        _console.print(f"Combined summary: {summary_path}")
+        self._console.rule(f"[bold green]Pipeline complete[/]")
+        self._console.print(f"Combined summary: {summary_path}")
         return summary_path
 
+    @staticmethod
+    def _run_one(
+        *,
+        function_path: str,
+        out_dir: str,
+        variants: list[str] | None,
+        repeat: int | None,
+    ) -> list[dict]:
+        """Process worker: run ablation for one function and return flat rows."""
+        out_root = Path(out_dir)
+        func_name = _safe_name(function_path)
+        func_out = out_root / func_name
+        func_out.mkdir(parents=True, exist_ok=True)
 
-def _run_one_process(
-    *,
-    function_path: str,
-    out_dir: str,
-    variants: list[str] | None,
-    repeat: int | None,
-) -> list[dict]:
-    """Process worker: run ablation for one function and return flat rows."""
-    out_root = Path(out_dir)
-    func_name = _safe_name(function_path)
-    func_out = out_root / func_name
-    func_out.mkdir(parents=True, exist_ok=True)
+        runner = AblationRunner()
+        results = runner.run_matrix(
+            function_path=function_path,
+            variants=variants,
+            repeat=repeat,
+        )
+        runner.export_results(results, func_out, prefix=func_name)
 
-    runner = AblationRunner()
-    results = runner.run_matrix(
-        function_path=function_path,
-        variants=variants,
-        repeat=repeat,
-    )
-    runner.export_results(results, func_out, prefix=func_name)
-
-    rows: list[dict] = []
-    for r in results:
-        row = flat_row(r)
-        row["function_name"] = _safe_name(r.config.function_path)
-        rows.append(row)
-    return rows
+        rows: list[dict] = []
+        for r in results:
+            row = flat_row(r)
+            row["function_name"] = _safe_name(r.config.function_path)
+            rows.append(row)
+        return rows
 
 
 def _write_pipeline_summary_rows(
@@ -161,48 +161,8 @@ def _write_pipeline_summary_rows(
             df = df[cols]
         df.to_csv(csv_path, index=False)
     except ImportError:
-        if rows:
-            fieldnames = ["function_name"] + [
-                k for k in rows[0] if k != "function_name"
-            ]
-        else:
-            fieldnames = [
-                "function_name",
-                "run_id",
-                "function_path",
-                "prompt_variant",
-                "context_version",
-                "experiment_reasoning_technique",
-                "experiment_provider_thinking",
-                "experiment_llm_provider",
-                "experiment_model_id",
-                "experiment_temperature",
-                "experiment_max_tokens",
-                "experiment_seed",
-                "experiment_prompt_version",
-                "experiment_context_version",
-                "experiment_max_batches",
-                "stop_reason",
-                "statement_coverage_pct",
-                "branch_coverage_pct",
-                "covered_statements",
-                "total_statements",
-                "covered_branches",
-                "total_branches",
-                "redundancy_rate",
-                "total_input_tokens",
-                "total_output_tokens",
-                "total_tokens",
-                "elapsed_sec",
-                "batches_used",
-                "accepted_test_count",
-                "passing_test_count",
-                "rejected_candidate_count",
-                "candidate_count",
-                "tokens_per_batch",
-                "tokens_per_candidate",
-                "error",
-            ]
+        # Derive headers from actual data rather than a brittle hardcoded list.
+        fieldnames = list(rows[0].keys()) if rows else []
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()

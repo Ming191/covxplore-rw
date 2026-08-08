@@ -14,7 +14,6 @@ class PromptBuilder:
         return self._join([
             catalog_text("sections", "role"),
             catalog_text("sections", "output_format"),
-            catalog_text("reasoning_techniques", self.technique.value),
         ])
 
     def task_description(

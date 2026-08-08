@@ -1,31 +1,14 @@
-from types import SimpleNamespace
-
-from covxplore.crews.test_generation.crew import TestGenerationCrew, _validate_batch
-
-
-def test_task_validates_json_without_native_response_format():
-    crew = TestGenerationCrew.__new__(TestGenerationCrew)
-    crew._llm = "fake"
-    crew.tasks_config = {"generate_tests": {"description": "task", "expected_output": "batch"}}
-    task = crew.generate_tests()
-    assert task.output_pydantic is None
-    assert task.output_json is None
-    assert task.guardrail is _validate_batch
+from covxplore.crews.test_generation.crew import TestGenerationRunner
+from covxplore.prompts.config import ReasoningTechnique
+from covxplore.reasoning.strategies import DirectStrategy, get_reasoning_strategy
 
 
-def test_guardrail_returns_validated_canonical_json():
-    ok, result = _validate_batch(
-        SimpleNamespace(raw='{"candidates":[{"test_name":"t","test_body":"f();"}]}')
-    )
-    assert ok is True
-    assert '"test_body":"f();"' in result
+class FakeLLM:
+    usage_metrics = object()
 
 
-def test_guardrail_rejects_path_metadata():
-    ok, message = _validate_batch(
-        SimpleNamespace(
-            raw='{"candidates":[{"test_name":"t","test_body":"f();","expected_path":[]}]}'
-        )
-    )
-    assert ok is False
-    assert "Extra inputs are not permitted" in message
+def test_generation_runner_exposes_strategy_and_usage():
+    strategy = get_reasoning_strategy(ReasoningTechnique.NONE, FakeLLM())
+    runner = TestGenerationRunner(strategy)
+    assert isinstance(runner.strategy, DirectStrategy)
+    assert runner.usage_metrics is FakeLLM.usage_metrics

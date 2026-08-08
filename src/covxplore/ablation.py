@@ -12,11 +12,11 @@ from covxplore.generator import GenerationConfig, GenerationResult, generate
 from covxplore.prompts.registry import VARIANTS
 
 
-_console = Console()
-
-
 class AblationRunner:
     """Runs one or many experiments and collects results."""
+
+    def __init__(self, console: Console | None = None):
+        self._console = console or Console()
 
     def run_one(self, config: GenerationConfig) -> GenerationResult:
         """Execute a single experiment run end-to-end."""
@@ -46,7 +46,7 @@ class AblationRunner:
         results: list[GenerationResult] = []
         total = len(variants) * repeat
 
-        _console.rule(
+        self._console.rule(
             f"[bold]Ablation matrix: {len(variants)} variants × {repeat} repeats "
             f"= {total} runs[/]"
         )
@@ -60,7 +60,7 @@ class AblationRunner:
                 )
                 results.append(generate(exp_cfg))
 
-        _print_matrix_summary(results)
+        _print_matrix_summary(results, self._console)
         return results
 
     def export_results(
@@ -101,16 +101,16 @@ class AblationRunner:
             df = pd.DataFrame(rows)
             csv_path = out_dir / f"{prefix}_summary.csv"
             df.to_csv(csv_path, index=False)
-            _console.print(f"[green]Exported {len(results)} results to {out_dir}/[/]")
+            self._console.print(f"[green]Exported {len(results)} results to {out_dir}/[/]")
         except ImportError:
-            _console.print(
+            self._console.print(
                 "[yellow]pandas not installed — CSV export skipped. "
                 "Install with: pip install pandas[/]"
             )
 
 
-def _print_matrix_summary(results: list[GenerationResult]) -> None:
-    _console.rule("[bold]Ablation Summary[/]")
+def _print_matrix_summary(results: list[GenerationResult], console: Console) -> None:
+    console.rule("[bold]Ablation Summary[/]")
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Variant", style="cyan")
     table.add_column("Statement %", justify="right")
@@ -133,4 +133,4 @@ def _print_matrix_summary(results: list[GenerationResult]) -> None:
         )
 
 
-    _console.print(table)
+    console.print(table)

@@ -9,12 +9,17 @@ from dataclasses import asdict, dataclass, field
 
 from rich.console import Console
 
-from covxplore.config import get_settings
+from covxplore.config import Settings, get_settings
 from covxplore.generation.stop_reasons import StopReason
 from covxplore.prompts.registry import VARIANTS
 from covxplore.types import TestSuite
 
-_console = Console()
+__all__ = [
+    "GenerationConfig",
+    "GenerationResult",
+    "ExperimentMetadata",
+    "generate",
+]
 
 
 @dataclass(frozen=True)
@@ -31,19 +36,23 @@ class ExperimentMetadata:
     max_batches: int
 
     @classmethod
-    def capture(cls, config: "GenerationConfig") -> "ExperimentMetadata":
-        settings = get_settings()
-        provider = settings.llm_provider.strip().lower()
-        model_id = settings.local_model if provider == "local" else settings.deepseek_model
+    def capture(
+        cls,
+        config: "GenerationConfig",
+        settings: "Settings | None" = None,
+    ) -> "ExperimentMetadata":
+        s = settings or get_settings()
+        provider = s.llm_provider.strip().lower()
+        model_id = s.local_model if provider == "local" else s.deepseek_model
         return cls(
             reasoning_technique=config.prompt_variant,
-            provider_thinking=settings.llm_thinking,
+            provider_thinking=s.llm_thinking,
             llm_provider=provider,
             model_id=model_id,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.max_tokens,
-            seed=settings.llm_seed,
-            prompt_version=settings.prompt_version,
+            temperature=s.llm_temperature,
+            max_tokens=s.max_tokens,
+            seed=s.llm_seed,
+            prompt_version=s.prompt_version,
             context_version=config.context_version,
             max_batches=config.max_batches,
         )
@@ -217,15 +226,16 @@ class GenerationResult:
         return summary
 
 
-def generate(config: GenerationConfig) -> GenerationResult:
+def generate(config: GenerationConfig, console: Console | None = None) -> GenerationResult:
     from covxplore.flows.generation_flow import GenerationFlowRunner
 
-    return GenerationFlowRunner(console=_console).run(config)
+    return GenerationFlowRunner(console=console or Console()).run(config)
 
 
-def _print_result_summary(result: GenerationResult) -> None:
+def _print_result_summary(result: GenerationResult, console: Console | None = None) -> None:
+    out = console or Console()
     metrics = result.to_summary_dict()["metrics"]
-    _console.print(
+    out.print(
         f"  Statement: [bold]{metrics['statement_coverage_pct'] * 100:.0f}%[/]  |  "
         f"Branch: [bold]{metrics['branch_coverage_pct'] * 100:.0f}%[/]  |  "
         f"redundancy: {metrics['redundancy_rate'] * 100:.0f}%  |  "

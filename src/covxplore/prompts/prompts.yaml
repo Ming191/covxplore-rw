@@ -18,25 +18,12 @@ sections:
     Target remaining gaps and avoid candidates with zero expected marginal coverage.
 
   output_format: |
-    Return one JSON object with a candidates array. Each candidate contains test_name and test_body.
-    Omit expected_path and target metadata.
+    Final test batches contain only test_name and test_body. Omit expected_path and target metadata.
 
     test_body is raw C++ inserted into AkaUT's harness:
     1. Do not include headers, main(), namespace declarations, type definitions, or assertions.
     2. Prefix input variable names with AKA_AI_.
     3. Use the exact function signature and qualify namespace symbols.
-
-reasoning_techniques:
-  none: |
-    Generate tests directly without an explicit reasoning or planning stage.
-  cot: |
-    Reason step by step from the focal code and coverage gaps to concrete input and state.
-  least_to_most: |
-    Decompose the remaining problem and solve prerequisite setup and simpler conditions before harder combinations.
-  tree_of_thoughts: |
-    Explore multiple feasible approaches, compare their expected coverage, and use the best ones.
-  program_of_thoughts: |
-    Translate focal logic into concise pseudocode and predicates, then solve them for concrete inputs.
 
 workflow: >-
   Use the complete preloaded context, focal source, prior execution feedback, and current coverage gaps.
@@ -65,7 +52,7 @@ task:
 
     {workflow}
     Return 3-5 focused test candidates{path_requirement}.
-    Return only the structured batch; the Flow executes it and supplies updated feedback.
+    The Flow executes only the final batch and supplies updated feedback.
   context: |
     FUNCTION CONTEXT:
 

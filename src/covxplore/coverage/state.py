@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from covxplore.types.unvisited_branch import UnvisitedBranch
 from covxplore.types.unvisited_statement import UnvisitedStatement
@@ -38,6 +39,81 @@ class CoverageState:
     _structural_totals_known: bool = False
     consecutive_redundant: int = 0
     """Counter of back-to-back redundant tests; reset on progress."""
+
+    def dump(self) -> dict:
+        """Return a JSON-serialisable snapshot of this CoverageState."""
+        return {
+            "consecutive_redundant": self.consecutive_redundant,
+            "_cumulative_uncovered_stmt_ids": (
+                None
+                if self._cumulative_uncovered_stmt_ids is None
+                else sorted(self._cumulative_uncovered_stmt_ids)
+            ),
+            "_cumulative_uncovered_branch_keys": (
+                None
+                if self._cumulative_uncovered_branch_keys is None
+                else [
+                    {"node_id": node_id, "polarity": polarity}
+                    for node_id, polarity in sorted(self._cumulative_uncovered_branch_keys)
+                ]
+            ),
+            "_stmt_node_info": [
+                statement.model_dump(mode="json")
+                for _, statement in sorted(self._stmt_node_info.items())
+            ],
+            "_branch_node_info": [
+                branch.model_dump(mode="json")
+                for _, branch in sorted(self._branch_node_info.items())
+            ],
+            "_total_statements": self._total_statements,
+            "_total_branches": self._total_branches,
+            "_best_statement_visited": self._best_statement_visited,
+            "_best_branch_visited": self._best_branch_visited,
+            "_structural_totals_known": self._structural_totals_known,
+        }
+
+    @classmethod
+    def load(cls, data: Mapping[str, Any]) -> "CoverageState":
+        """Rehydrate a CoverageState from a snapshot produced by :meth:`dump`."""
+        state = cls()
+        state.consecutive_redundant = _non_negative_int(data.get("consecutive_redundant"), "consecutive_redundant")
+
+        stmt_ids = data.get("_cumulative_uncovered_stmt_ids")
+        state._cumulative_uncovered_stmt_ids = (
+            None if stmt_ids is None else {int(node_id) for node_id in stmt_ids}
+        )
+
+        branch_keys = data.get("_cumulative_uncovered_branch_keys")
+        state._cumulative_uncovered_branch_keys = (
+            None
+            if branch_keys is None
+            else {(int(item["node_id"]), bool(item["polarity"])) for item in branch_keys}
+        )
+
+        state._stmt_node_info = {}
+        for item in data.get("_stmt_node_info") or []:
+            statement = UnvisitedStatement.model_validate(item)
+            if statement.node_id is None:
+                raise ValueError("_stmt_node_info entry missing node_id")
+            state._stmt_node_info[statement.node_id] = statement
+
+        state._branch_node_info = {}
+        for item in data.get("_branch_node_info") or []:
+            branch = UnvisitedBranch.model_validate(item)
+            if branch.node_id is None:
+                raise ValueError("_branch_node_info entry missing node_id")
+            state._branch_node_info[branch.node_id] = branch
+
+        for field_name in (
+            "_total_statements",
+            "_total_branches",
+            "_best_statement_visited",
+            "_best_branch_visited",
+        ):
+            setattr(state, field_name, _non_negative_int(data.get(field_name), field_name))
+
+        state._structural_totals_known = bool(data.get("_structural_totals_known", False))
+        return state
 
     def add_result(
         self,
@@ -271,3 +347,14 @@ class CoverageState:
             self._cumulative_uncovered_branch_keys = uncovered
         else:
             self._cumulative_uncovered_branch_keys &= uncovered
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers (private)
+# ---------------------------------------------------------------------------
+
+def _non_negative_int(value: Any, field_name: str) -> int:
+    result = int(value or 0)
+    if result < 0:
+        raise ValueError(f"{field_name} must be >= 0")
+    return result

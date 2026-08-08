@@ -13,11 +13,12 @@ def test_registry_contains_only_reasoning_techniques():
 def test_reasoning_variants_share_the_same_non_reasoning_prompt():
     prompts = {name: PromptBuilder(get_variant(name)).system_prompt() for name in VARIANTS}
     assert all("omit expected_path" in prompt.lower() for prompt in prompts.values())
-    assert "without an explicit reasoning" in prompts["none"]
-    assert "step by step" in prompts["cot"]
-    assert "simpler conditions" in prompts["least_to_most"]
-    assert "multiple feasible approaches" in prompts["tree_of_thoughts"]
-    assert "pseudocode and predicates" in prompts["program_of_thoughts"]
+    # Reasoning-specific guidance lives in strategies, not in the system prompt.
+    # System prompts are role + output_format only; techniques are applied at call time.
+    assert all(
+        "without an explicit reasoning" not in prompt.lower()
+        for prompt in prompts.values()
+    )
 
 
 def test_task_contains_context_source_gap_and_prior_feedback():
@@ -36,5 +37,6 @@ def test_task_contains_context_source_gap_and_prior_feedback():
 
 
 def test_catalog_has_one_reasoning_template_per_technique():
+    # Reasoning techniques live in strategies, not in the YAML catalog.
     catalog = load_catalog()
-    assert set(catalog["reasoning_techniques"]) == set(get_reasoning_variants())
+    assert "reasoning_techniques" not in catalog
