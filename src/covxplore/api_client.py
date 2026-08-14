@@ -16,6 +16,8 @@ __all__ = [
     "ContextV2Result",
     "SourceResult",
     "ConditionInfo",
+    "PathStep",
+    "ExecutionPath",
     "NodeConditionsResult",
     "ExecuteResult",
 ]
@@ -62,12 +64,28 @@ class ConditionInfo:
 
 
 @dataclass
+class PathStep:
+    node_id: int
+    condition: str
+    required_outcome: str
+
+
+@dataclass
+class ExecutionPath:
+    execution_sequence: list[PathStep]
+    target_node_id: int
+    target_condition: str
+    target_outcome: str
+
+
+@dataclass
 class NodeConditionsResult:
     absolute_path: str
     total_conditions: int
     total_statements: int | None
     total_branches: int | None
     conditions: list[ConditionInfo]
+    execution_paths: list[ExecutionPath]
 
 
 @dataclass
@@ -195,6 +213,22 @@ class AkaUTClient:
             )
             for item in (data.get("conditions") or [])
         ]
+        execution_paths = [
+            ExecutionPath(
+                execution_sequence=[
+                    PathStep(
+                        node_id=int(step["nodeId"]),
+                        condition=step.get("condition") or "",
+                        required_outcome=step.get("requiredOutcome") or "",
+                    )
+                    for step in (item.get("executionSequence") or [])
+                ],
+                target_node_id=int(item["targetNodeId"]),
+                target_condition=item.get("targetCondition") or "",
+                target_outcome=item.get("targetOutcome") or "",
+            )
+            for item in (data.get("executionPaths") or [])
+        ]
         return NodeConditionsResult(
             absolute_path=data.get("absolutePath") or absolute_path,
             total_conditions=int(data.get("totalConditions") or len(conditions)),
@@ -205,6 +239,7 @@ class AkaUTClient:
                 int(data["totalBranches"]) if data.get("totalBranches") is not None else None
             ),
             conditions=conditions,
+            execution_paths=execution_paths,
         )
 
     def search_nodes(

@@ -50,6 +50,15 @@ class DriverContractValidator:
                 )
             )
 
+        if _has_value_return(tree.root_node, source):
+            violations.append(
+                ContractViolation(
+                    code="RETURN_VALUE",
+                    message="Test body is inserted into a void AkaUT harness function; use return; or discard the result.",
+                    severity="ERROR",
+                )
+            )
+
         if _has_node_type(tree.root_node, "preproc_include"):
             violations.append(
                 ContractViolation(
@@ -120,6 +129,12 @@ def _has_main_definition(node: Node, source: bytes) -> bool:
         if declarator is not None and _function_declarator_name(declarator, source) == "main":
             return True
     return any(_has_main_definition(child, source) for child in node.children)
+
+
+def _has_value_return(node: Node, source: bytes) -> bool:
+    if node.type == "return_statement":
+        return _node_text(node, source).strip() != "return;"
+    return any(_has_value_return(child, source) for child in node.children)
 
 
 def _function_declarator_name(node: Node, source: bytes) -> str | None:

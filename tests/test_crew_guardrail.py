@@ -4,11 +4,14 @@ from covxplore.reasoning.strategies import DirectStrategy, get_reasoning_strateg
 
 
 class FakeLLM:
-    usage_metrics = object()
+    metrics = object()
+
+    def get_token_usage_summary(self):
+        return self.metrics
 
 
 def test_generation_runner_exposes_strategy_and_usage():
     strategy = get_reasoning_strategy(ReasoningTechnique.NONE, FakeLLM())
     runner = TestGenerationRunner(strategy)
     assert isinstance(runner.strategy, DirectStrategy)
-    assert runner.usage_metrics is FakeLLM.usage_metrics
+    assert runner.usage_metrics is FakeLLM.metrics

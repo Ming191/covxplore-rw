@@ -24,7 +24,11 @@ class StrategyRunner:
 
     @property
     def usage_metrics(self):
-        return getattr(self.strategy.llm, "usage_metrics", None)
+        return self.strategy.llm.get_token_usage_summary()
+
+    @property
+    def reasoning_trace(self) -> list[dict[str, str]]:
+        return self.strategy.reasoning_trace
 
     def generate(self, inputs: ReasoningInput):
         return self.strategy.generate_batch(inputs)

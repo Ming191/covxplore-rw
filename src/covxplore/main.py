@@ -41,6 +41,10 @@ def run_generation() -> None:
         "--max-batches", type=int, default=None,
         help="Override max batches (default: Settings.max_batches).",
     )
+    parser.add_argument(
+        "--no-agentic-context", action="store_true",
+        help="Bypass dynamic Agentic context searching tools and use static prompt context only.",
+    )
     args = parser.parse_args()
 
     from covxplore.config import get_settings
@@ -54,6 +58,7 @@ def run_generation() -> None:
         prompt_variant=variant,
         context_version=args.context_version or cfg.context_version,
         max_batches=args.max_batches if args.max_batches is not None else cfg.max_batches,
+        disable_agentic_context=args.no_agentic_context,
     )
 
     result = generate(exp_cfg)

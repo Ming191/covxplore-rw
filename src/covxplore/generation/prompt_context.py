@@ -11,6 +11,7 @@ class StaticPromptData:
     source_text: str
     total_statements: int | None = None
     total_branches: int | None = None
+    execution_paths: list[dict[str, Any]] | None = None
 
 
 def format_context_v2_for_prompt(data: dict[str, Any]) -> str:
@@ -32,6 +33,19 @@ def format_context_v2_for_prompt(data: dict[str, Any]) -> str:
                     lines.append("  public fields:")
                     for field in fields:
                         lines.append(f"  - {field.get('type')} {field.get('name')}")
+
+    declarations = data.get("externalDeclarations") or []
+    if declarations:
+        lines.append("External declarations:")
+        for declaration in declarations:
+            used_by = ", ".join(declaration.get("usedBy") or [])
+            suffix = f" used by {used_by}" if used_by else ""
+            lines.append(
+                f"- [{declaration.get('kind')}] {declaration.get('name')}{suffix}"
+            )
+            source = declaration.get("source")
+            if source:
+                lines.extend(f"  {line}" for line in source.splitlines())
 
     conditions = data.get("conditions") or []
     if conditions:
@@ -66,28 +80,15 @@ def format_context_v2_for_prompt(data: dict[str, Any]) -> str:
             for stmt in site.get("statementsBeforeCall") or []:
                 lines.append(f"  line {stmt.get('line')}: {stmt.get('text')}")
 
-    helpers = data.get("helperEffects") or []
+    helpers = data.get("helpers") or []
     if helpers:
-        lines.append("Helper effects:")
+        lines.append("Helpers:")
         for helper in helpers[:12]:
-            lines.append(f"- {helper.get('signature') or helper.get('function')}")
-            reads = _refs_text(helper.get("reads") or [])
-            writes = _refs_text(helper.get("writes") or [])
-            calls = ", ".join(
-                call.get("name", "") for call in (helper.get("calls") or []) if call.get("name")
-            )
-            if reads:
-                lines.append(f"  reads: {reads}")
-            if writes:
-                lines.append(f"  writes: {writes}")
-            if calls:
-                lines.append(f"  calls: {calls}")
+            lines.append(f"- {helper.get('signature') or helper.get('absolutePath')}")
             source = helper.get("source")
             if source:
                 lines.append("  source:")
                 lines.extend(f"    {line}" for line in source.splitlines())
-            elif helper.get("sourceMode"):
-                lines.append(f"  source: [{helper.get('sourceMode')}]")
 
     return "\n".join(lines)
 

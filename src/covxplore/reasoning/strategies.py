@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import ast
 import json
-import resource
-import subprocess
-import sys
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TypeVar
@@ -15,29 +12,33 @@ from pydantic import BaseModel
 from covxplore.agents.schemas import GenerateTestBatchAction
 from covxplore.llm import build_llm
 from covxplore.prompts.config import ReasoningTechnique
-from covxplore.reasoning.schemas import (
-    ChainOfThoughtResult,
-    Decomposition,
-    ProgramOfThoughts,
-    ProgramScenarios,
-    SubproblemSolution,
-    ThoughtEvaluation,
-    ThoughtPlan,
-    ThoughtPlans,
-)
+from covxplore.reasoning.context_agent import ContextAgent, ContextRequest
+from covxplore.reasoning.context_tools import AkaUTContextTools
+from covxplore.reasoning.schemas import ChainOfThoughtResult, PathGuidedResult
 
 T = TypeVar("T", bound=BaseModel)
+logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class ReasoningInput:
     system_prompt: str
     task_prompt: str
+    function_path: str = ""
+    execution_feedback_text: str | None = None
+    cached_context_evidence: str | None = None
+    disable_agentic_context: bool = False
 
 
 class ReasoningStrategy(ABC):
-    def __init__(self, llm: LLM | None = None):
+    def __init__(
+        self,
+        llm: LLM | None = None,
+        context_tools: AkaUTContextTools | None = None,
+    ):
         self.llm = llm or build_llm()
+        self.reasoning_trace: list[dict[str, str]] = []
+        self._context_agent = ContextAgent(self._json_call, context_tools)
 
     @abstractmethod
     def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
@@ -49,28 +50,70 @@ class ReasoningStrategy(ABC):
             {"role": "user", "content": prompt},
         ]
         error = ""
+        raw_response = ""
         for _ in range(2):
             response = self.llm.call(messages)
+            raw_response = str(response)
             try:
-                return schema.model_validate_json(_json_object(str(response)))
+                return schema.model_validate_json(_json_object(raw_response))
             except Exception as exc:
                 error = str(exc)
                 messages.extend(
                     [
-                        {"role": "assistant", "content": str(response)},
+                        {"role": "assistant", "content": raw_response},
                         {
                             "role": "user",
                             "content": f"Invalid output: {error}. Return a corrected JSON object only.",
                         },
                     ]
                 )
-        raise ValueError(f"LLM did not return valid {schema.__name__}: {error}")
+        diagnostic = raw_response[:4096]
+        logger.error("Invalid %s response after retry: %r", schema.__name__, diagnostic)
+        raise ValueError(
+            f"LLM did not return valid {schema.__name__}: {error}; raw response: {diagnostic!r}"
+        )
+
+    def _context_evidence(self, reasoning_input: ReasoningInput) -> str:
+        if reasoning_input.disable_agentic_context:
+            return ""
+        if reasoning_input.cached_context_evidence is not None:
+            return reasoning_input.cached_context_evidence
+        if not reasoning_input.function_path:
+            return ""
+        evidence = self._context_agent.resolve(
+            ContextRequest(
+                function_path=reasoning_input.function_path,
+                system_prompt=reasoning_input.system_prompt,
+                task_prompt=reasoning_input.task_prompt,
+                execution_feedback_text=reasoning_input.execution_feedback_text,
+            )
+        )
+        reasoning_input.cached_context_evidence = evidence
+        return evidence
 
     @staticmethod
-    def _batch_prompt(reasoning_input: ReasoningInput, evidence: str = "") -> str:
-        suffix = f"\n\nREASONING EVIDENCE:\n{evidence}" if evidence else ""
+    def _evidence_text(*parts: str) -> str:
+        return "\n\n".join(part for part in parts if part)
+
+    @staticmethod
+    def _prompt_with_context(reasoning_input: ReasoningInput, evidence: str) -> str:
+        suffix = f"\n\nAGENTIC CONTEXT EVIDENCE:\n{evidence}" if evidence else ""
+        return f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}{suffix}"
+
+    @classmethod
+    def _batch_prompt(
+        cls,
+        reasoning_input: ReasoningInput,
+        context_evidence: str = "",
+        reasoning_evidence: str = "",
+    ) -> str:
+        suffix = (
+            f"\n\nREASONING EVIDENCE:\n{reasoning_evidence}"
+            if reasoning_evidence
+            else ""
+        )
         return (
-            f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}{suffix}\n\n"
+            f"{cls._prompt_with_context(reasoning_input, context_evidence)}{suffix}\n\n"
             "Return JSON matching: "
             '{"candidates":[{"test_name":"...","test_body":"..."}]}.'
         )
@@ -78,238 +121,143 @@ class ReasoningStrategy(ABC):
 
 class DirectStrategy(ReasoningStrategy):
     def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
-        return self._json_call(self._batch_prompt(reasoning_input), GenerateTestBatchAction)
+        context = self._context_evidence(reasoning_input)
+        return self._json_call(
+            self._batch_prompt(reasoning_input, context), GenerateTestBatchAction
+        )
 
 
 class ChainOfThoughtStrategy(ReasoningStrategy):
     def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
+        context = self._context_evidence(reasoning_input)
         prompt = (
-            f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}\n\n"
-            "Work step by step before committing to tests. Trace relevant conditions, derive concrete "
-            "input/state constraints, check candidate diversity, then provide the final batch. Return JSON "
-            'matching {"reasoning":"explicit step-by-step rationale",'
-            '"candidates":[{"test_name":"...","test_body":"..."}]}.'
+            f"{self._prompt_with_context(reasoning_input, context)}\n\n"
+            "Before writing tests, build a coverage plan in this exact order inside reasoning:\n"
+            "1. Resolve relevant constants and helper predicates. Enumerate every focal condition outcome "
+            "and mark it reachable or unreachable with a concrete reason.\n"
+            "2. For each reachable outcome, derive concrete input/state constraints, including loop "
+            "iterations and nested/helper calls that may re-enter the focal function.\n"
+            "3. Propose candidates and map each candidate to the condition outcomes it should cover.\n"
+            "4. Order candidates, compute expected marginal coverage against the union of earlier "
+            "candidates, and remove or merge any candidate whose outcomes are a subset. Different input "
+            "syntax alone is not diversity.\n"
+            "5. Check that each remaining test body is compilable under the supplied harness contract. "
+            "Do not claim complete reachable coverage unless every reachable outcome is mapped.\n"
+            "Then provide the final batch. Return JSON matching "
+            '{"reasoning":"numbered coverage plan with reachability, constraints, candidate mapping, '
+            'overlap check, and compile check",'
+            '"candidates":[{"test_name":"...","test_body":"..."}]}. '
         )
         result = self._json_call(prompt, ChainOfThoughtResult)
+        self.reasoning_trace.append({"stage": "chain_of_thought", "content": result.reasoning})
         return GenerateTestBatchAction(candidates=result.candidates)
 
 
-class LeastToMostStrategy(ReasoningStrategy):
+class PathGuidedStrategy(ReasoningStrategy):
     def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
-        decomposition = self._json_call(
-            f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}\n\n"
-            "Decompose the test-generation problem into an ordered list of simpler prerequisite "
-            "subproblems, from easiest setup/condition to hardest interaction. Do not solve them yet. "
-            'Return {"subproblems":["..."]}.',
-            Decomposition,
-        )
-        solved: list[dict] = []
-        for subproblem in decomposition.subproblems:
-            solution = self._json_call(
-                f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}\n\n"
-                f"PREVIOUSLY SOLVED SUBPROBLEMS:\n{json.dumps(solved, ensure_ascii=False)}\n\n"
-                f"SOLVE NEXT SUBPROBLEM:\n{subproblem}\n\n"
-                "Use prior solutions as established facts. Derive concrete C++ input/state scenarios. "
-                'Return {"analysis":"...","scenarios":["..."]}.',
-                SubproblemSolution,
+        context = self._context_evidence(reasoning_input)
+        from covxplore.api_client import AkaUTClient
+
+        with AkaUTClient() as client:
+            paths = client.get_node_conditions(
+                reasoning_input.function_path, coverage_type="BRANCH"
+            ).execution_paths
+        if not paths:
+            raise ValueError("AkaUT returned no CFG execution paths")
+        uncovered_targets = _uncovered_targets(reasoning_input.execution_feedback_text)
+        selected = [
+            path
+            for path in paths
+            if not uncovered_targets
+            or (path.target_node_id, path.target_outcome) in uncovered_targets
+        ]
+        selected.sort(
+            key=lambda path: (
+                -len(path.execution_sequence),
+                path.target_node_id,
+                path.target_outcome,
             )
-            solved.append({"subproblem": subproblem, **solution.model_dump()})
-        return self._json_call(
-            self._batch_prompt(reasoning_input, json.dumps(solved, ensure_ascii=False)),
-            GenerateTestBatchAction,
         )
-
-
-class TreeOfThoughtsStrategy(ReasoningStrategy):
-    def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
-        plans = self._json_call(
-            f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}\n\n"
-            "Propose 3-5 genuinely different batch-level plans. Each plan must target a different "
-            "combination of coverage gaps or setup strategy. Do not write tests yet. Return "
-            '{"plans":[{"plan_id":"p1","approach":"...","target_gaps":["..."],'
-            '"setup_strategy":"..."}]}.',
-            ThoughtPlans,
+        payload = [
+            {
+                "target_node_id": path.target_node_id,
+                "target_condition": path.target_condition,
+                "target_outcome": path.target_outcome,
+                "execution_sequence": [
+                    {
+                        "node_id": step.node_id,
+                        "condition": step.condition,
+                        "required_outcome": step.required_outcome,
+                    }
+                    for step in path.execution_sequence
+                ],
+            }
+            for path in selected[:5]
+        ]
+        result = self._json_call(
+            f"{self._prompt_with_context(reasoning_input, context)}\n\n"
+            "CFG-DERIVED EXECUTION PATHS:\n"
+            f"{json.dumps(payload, ensure_ascii=False)}\n\n"
+            "Generate one test per listed target path. Satisfy the ordered outcomes exactly; earlier "
+            "conditions are mandatory reachability constraints. Do not add Chain-of-Thought or a "
+            "reasoning field. Avoid a candidate if another listed path's test necessarily covers its "
+            "target. Return one JSON object, never a JSON array. For JSON-like C++ input, use raw "
+            'literals such as R"AKA({...})AKA", never escaped quotes. Return JSON matching '
+            '{"candidates":[{"test_name":"...","test_body":"...",'
+            '"target_node_id":1,"target_outcome":"TRUE"}]}.',
+            PathGuidedResult,
         )
-        first_scores = self._evaluate(reasoning_input, plans)
-        finalists = _rank_plans(plans, first_scores)[:2]
-        expanded = [self._expand(reasoning_input, plan) for plan in finalists]
-        expanded_plans = ThoughtPlans(plans=expanded + finalists[:1])
-        final_scores = self._evaluate(reasoning_input, expanded_plans)
-        winner = _rank_plans(expanded_plans, final_scores)[0]
-        return self._json_call(
-            self._batch_prompt(reasoning_input, winner.model_dump_json()),
-            GenerateTestBatchAction,
+        self.reasoning_trace.append(
+            {
+                "stage": "cfg_execution_paths",
+                "content": json.dumps(payload, ensure_ascii=False),
+            }
         )
-
-    def _evaluate(
-        self, reasoning_input: ReasoningInput, plans: ThoughtPlans
-    ) -> ThoughtEvaluation:
-        return self._json_call(
-            f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}\n\n"
-            f"CANDIDATE PLANS:\n{plans.model_dump_json()}\n\n"
-            "Evaluate every plan for expected new branch/statement coverage, feasibility of concrete "
-            "C++ setup, compile risk, and overlap between proposed candidates. Score 0-10. Return "
-            '{"scores":[{"plan_id":"p1","score":8,"rationale":"..."}]}.',
-            ThoughtEvaluation,
-        )
-
-    def _expand(self, reasoning_input: ReasoningInput, plan: ThoughtPlan) -> ThoughtPlan:
-        return self._json_call(
-            f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}\n\n"
-            f"PLAN TO EXPAND:\n{plan.model_dump_json()}\n\n"
-            "Refine this plan after one-step lookahead: identify likely missed short-circuit/loop/error "
-            "branches and improve its setup strategy. Return one plan with a new plan_id matching "
-            '{"plan_id":"...","approach":"...","target_gaps":["..."],'
-            '"setup_strategy":"..."}.',
-            ThoughtPlan,
-        )
-
-
-class ProgramOfThoughtsStrategy(ReasoningStrategy):
-    def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
-        program = self._json_call(
-            f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}\n\n"
-            "Write a small Python program that computes diverse concrete input/state scenarios from "
-            "the focal predicates. The program must assign a JSON-serializable list of dictionaries to "
-            "a variable named scenarios. It may use assignments, for/range, if, arithmetic, comparisons, "
-            "and list.append only. No imports, files, network, classes, functions, while, exceptions, or "
-            'dunder names. Return {"program":"..."}.',
-            ProgramOfThoughts,
-        )
-        scenarios = execute_program_of_thoughts(program.program)
-        return self._json_call(
-            self._batch_prompt(reasoning_input, scenarios.model_dump_json()),
-            GenerateTestBatchAction,
+        return GenerateTestBatchAction(
+            candidates=[
+                {"test_name": candidate.test_name, "test_body": candidate.test_body}
+                for candidate in result.candidates
+            ]
         )
 
 
 _STRATEGIES: dict[ReasoningTechnique, type[ReasoningStrategy]] = {
     ReasoningTechnique.NONE: DirectStrategy,
     ReasoningTechnique.COT: ChainOfThoughtStrategy,
-    ReasoningTechnique.LEAST_TO_MOST: LeastToMostStrategy,
-    ReasoningTechnique.TREE_OF_THOUGHTS: TreeOfThoughtsStrategy,
-    ReasoningTechnique.PROGRAM_OF_THOUGHTS: ProgramOfThoughtsStrategy,
+    ReasoningTechnique.PATH_GUIDED: PathGuidedStrategy,
 }
 
 
 def get_reasoning_strategy(
-    technique: ReasoningTechnique, llm: LLM | None = None
+    technique: ReasoningTechnique,
+    llm: LLM | None = None,
+    context_tools: AkaUTContextTools | None = None,
 ) -> ReasoningStrategy:
-    return _STRATEGIES[technique](llm)
+    return _STRATEGIES[technique](llm, context_tools)
 
 
-def execute_program_of_thoughts(program: str) -> ProgramScenarios:
-    tree = ast.parse(program, mode="exec")
-    _ProgramValidator().visit(tree)
-    wrapper = (
-        "import json\n"
-        + program
-        + "\nprint(json.dumps(scenarios, ensure_ascii=False, separators=(',', ':')))\n"
-    )
-    completed = subprocess.run(
-        [sys.executable, "-I", "-S", "-c", wrapper],
-        capture_output=True,
-        text=True,
-        timeout=5,
-        check=True,
-        preexec_fn=_restrict_process,
-    )
-    if len(completed.stdout) > 1_000_000:
-        raise ValueError("Program-of-Thoughts output exceeds 1 MB")
-    return ProgramScenarios(scenarios=json.loads(completed.stdout))
+def _uncovered_targets(feedback: str | None) -> set[tuple[int, str]]:
+    if not feedback:
+        return set()
+    import re
+
+    targets: set[tuple[int, str]] = set()
+    for node_id, outcomes in re.findall(
+        r"node:(\d+).*?missing=([A-Z,]+)", feedback
+    ):
+        targets.update((int(node_id), outcome) for outcome in outcomes.split(","))
+    return targets
 
 
 def _json_object(text: str) -> str:
-    start, end = text.find("{"), text.rfind("}")
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        first_nl = stripped.find("\n")
+        if first_nl >= 0:
+            stripped = stripped[first_nl + 1 :]
+        if stripped.rstrip().endswith("```"):
+            stripped = stripped.rstrip()[:-3]
+    start, end = stripped.find("{"), stripped.rfind("}")
     if start < 0 or end < start:
         raise ValueError("response contains no JSON object")
-    return text[start : end + 1]
-
-
-def _rank_plans(plans: ThoughtPlans, evaluation: ThoughtEvaluation) -> list[ThoughtPlan]:
-    scores = {score.plan_id: score.score for score in evaluation.scores}
-    missing = [plan.plan_id for plan in plans.plans if plan.plan_id not in scores]
-    if missing:
-        raise ValueError(f"Evaluator omitted plans: {', '.join(missing)}")
-    return sorted(plans.plans, key=lambda plan: scores[plan.plan_id], reverse=True)
-
-
-def _restrict_process() -> None:
-    resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
-    resource.setrlimit(resource.RLIMIT_AS, (128 * 1024 * 1024, 128 * 1024 * 1024))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
-
-
-class _ProgramValidator(ast.NodeVisitor):
-    _ALLOWED = (
-        ast.Module,
-        ast.Assign,
-        ast.Expr,
-        ast.For,
-        ast.If,
-        ast.Name,
-        ast.Load,
-        ast.Store,
-        ast.Constant,
-        ast.List,
-        ast.Dict,
-        ast.Tuple,
-        ast.Subscript,
-        ast.Slice,
-        ast.Call,
-        ast.Attribute,
-        ast.BinOp,
-        ast.UnaryOp,
-        ast.BoolOp,
-        ast.Compare,
-        ast.Add,
-        ast.Sub,
-        ast.Mult,
-        ast.Div,
-        ast.FloorDiv,
-        ast.Mod,
-        ast.Pow,
-        ast.USub,
-        ast.UAdd,
-        ast.Not,
-        ast.And,
-        ast.Or,
-        ast.Eq,
-        ast.NotEq,
-        ast.Lt,
-        ast.LtE,
-        ast.Gt,
-        ast.GtE,
-        ast.In,
-        ast.NotIn,
-    )
-    _CALLS = {"range", "len", "str", "int", "float", "bool"}
-
-    def __init__(self) -> None:
-        self.nodes = 0
-
-    def generic_visit(self, node) -> None:
-        self.nodes += 1
-        if self.nodes > 500:
-            raise ValueError("Program-of-Thoughts program is too large")
-        if not isinstance(node, self._ALLOWED):
-            raise ValueError(f"Program-of-Thoughts forbids {type(node).__name__}")
-        super().generic_visit(node)
-
-    def visit_Name(self, node: ast.Name) -> None:
-        if node.id.startswith("_"):
-            raise ValueError("Program-of-Thoughts forbids private names")
-        self.generic_visit(node)
-
-    def visit_Attribute(self, node: ast.Attribute) -> None:
-        if node.attr != "append" or not isinstance(node.value, ast.Name):
-            raise ValueError("Program-of-Thoughts only permits list.append")
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        valid_name = isinstance(node.func, ast.Name) and node.func.id in self._CALLS
-        valid_append = isinstance(node.func, ast.Attribute) and node.func.attr == "append"
-        if not (valid_name or valid_append) or node.keywords:
-            raise ValueError("Program-of-Thoughts call is not permitted")
-        self.generic_visit(node)
+    return stripped[start : end + 1]

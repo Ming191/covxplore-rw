@@ -35,3 +35,14 @@ src/covxplore/prompts/sections/*_gtest.txt
 # Test run outputs
 test_results/
 batches
+local/
+docs/
+research/
+
+# Local experiment artifacts
+benchmark-*/
+compare-*/
+compare-*.log
+context-compare-*.log
+context-compare-*.txt
+direct-vs-cot-prompt-example.md

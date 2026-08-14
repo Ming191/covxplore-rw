@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,42 +13,20 @@ class _StrictModel(BaseModel):
 
 class ChainOfThoughtResult(_StrictModel):
     reasoning: str = Field(..., min_length=1)
-    candidates: list[GenerateTestAction] = Field(..., min_length=1, max_length=5)
+    candidates: list[GenerateTestAction] = Field(..., min_length=1, max_length=8)
 
 
-class Decomposition(_StrictModel):
-    subproblems: list[str] = Field(..., min_length=1, max_length=6)
+class PathTargetedTest(GenerateTestAction):
+    target_node_id: int
+    target_outcome: Literal["TRUE", "FALSE"]
 
 
-class SubproblemSolution(_StrictModel):
-    analysis: str = Field(..., min_length=1)
-    scenarios: list[str] = Field(..., min_length=1, max_length=8)
+class PathGuidedResult(_StrictModel):
+    candidates: list[PathTargetedTest] = Field(..., min_length=1, max_length=5)
 
 
-class ThoughtPlan(_StrictModel):
-    plan_id: str = Field(..., min_length=1)
-    approach: str = Field(..., min_length=1)
-    target_gaps: list[str] = Field(..., min_length=1)
-    setup_strategy: str = Field(..., min_length=1)
-
-
-class ThoughtPlans(_StrictModel):
-    plans: list[ThoughtPlan] = Field(..., min_length=3, max_length=5)
-
-
-class ThoughtScore(_StrictModel):
-    plan_id: str = Field(..., min_length=1)
-    score: int = Field(..., ge=0, le=10)
-    rationale: str = Field(..., min_length=1)
-
-
-class ThoughtEvaluation(_StrictModel):
-    scores: list[ThoughtScore] = Field(..., min_length=1)
-
-
-class ProgramOfThoughts(_StrictModel):
-    program: str = Field(..., min_length=1)
-
-
-class ProgramScenarios(_StrictModel):
-    scenarios: list[dict[str, Any]] = Field(..., min_length=1, max_length=100)
+class ContextAction(_StrictModel):
+    action: Literal["search_nodes", "get_node_source", "done"]
+    query: str | None = None
+    types: list[str] = Field(default_factory=list, max_length=8)
+    absolute_path: str | None = None

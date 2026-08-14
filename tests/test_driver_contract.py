@@ -38,6 +38,14 @@ def test_main_text_in_comment_or_string_is_not_rejected():
     assert "HAS_MAIN" not in codes
 
 
+def test_returning_a_value_is_rejected():
+    assert _codes("if (failed) return false;")["RETURN_VALUE"] == "ERROR"
+
+
+def test_void_return_is_allowed():
+    assert "RETURN_VALUE" not in _codes("if (failed) return;")
+
+
 def test_missing_actual_output_marker_is_warning():
     codes = _codes("int x = 1; target(x);")
 

@@ -35,6 +35,8 @@ class GenerationFlowState(BaseModel):
     token_ledger: dict = Field(default_factory=dict)
 
     execution_feedback: str = ""
+    cached_context_evidence: str = ""
+    reasoning_trace: list[dict[str, object]] = Field(default_factory=list)
 
 
 class TestSuiteCodec:
@@ -124,6 +126,7 @@ class GenerationRuntimeSession:
         error_message: str | None = None,
         static_prompt: StaticPromptSnapshot | None = None,
         execution_feedback: str = "",
+        cached_context_evidence: str = "",
     ) -> GenerationFlowState:
         return GenerationFlowState(
             config=self.config.to_dict(),
@@ -133,6 +136,7 @@ class GenerationRuntimeSession:
             error_message=error_message,
             token_ledger=self.token_ledger.to_dict(),
             execution_feedback=execution_feedback,
+            cached_context_evidence=cached_context_evidence,
         )
 
     def cleanup(self) -> None:

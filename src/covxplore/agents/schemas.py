@@ -44,9 +44,9 @@ class GenerateTestBatchAction(BaseModel):
     candidates: list[GenerateTestAction] = Field(
         ...,
         min_length=1,
-        max_length=5,
+        max_length=8,
         description=(
-            "One to five distinct test candidates. Use fewer when fewer useful "
+            "One to eight distinct test candidates. Use fewer when fewer useful "
             "coverage gaps remain."
         ),
     )

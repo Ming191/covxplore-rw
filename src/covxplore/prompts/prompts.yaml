@@ -22,12 +22,14 @@ sections:
 
     test_body is raw C++ inserted into AkaUT's harness:
     1. Do not include headers, main(), namespace declarations, type definitions, or assertions.
-    2. Prefix input variable names with AKA_AI_.
+    2. The harness declares no variables; declare every value used.
     3. Use the exact function signature and qualify namespace symbols.
+    4. For JSON-like C++ input, use a raw string literal such as R"AKA({...})AKA"; raw strings must close exactly as )AKA". Do not use C++ escaped quotes (\") in test_body.
+    5. AkaUT inserts test_body into a void function. Do not use assertions or return with a value; call the focal function for coverage and discard its return value. Call non-static methods through a declared object, never Type::method(...).
 
 workflow: >-
   Use the complete preloaded context, focal source, prior execution feedback, and current coverage gaps.
-  Return 3-5 focused candidates; use fewer only when fewer useful candidates remain.
+  Return 3-8 focused candidates; use fewer only when fewer useful candidates remain.
 
 coverage:
   no_tests: >-
@@ -51,7 +53,7 @@ task:
       {function_path}
 
     {workflow}
-    Return 3-5 focused test candidates{path_requirement}.
+    Return 3-8 focused test candidates{path_requirement}.
     The Flow executes only the final batch and supplies updated feedback.
   context: |
     FUNCTION CONTEXT:

@@ -54,6 +54,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
         self.state.suite = session.suite_codec.dump_suite(suite)
         self.state.token_ledger = session.token_ledger.to_dict()
         self.state.execution_feedback = ""
+        self.state.reasoning_trace = []
         self.state.stop_reason = "agent_done"
         self.state.error_message = None
         session.cleanup()
@@ -71,9 +72,11 @@ class GenerationFlow(Flow[GenerationFlowState]):
             session.restore_ledger(self.state.token_ledger)
             suite = session.active_suite()
             bundle: CrewBundle | None = None
+            batch_number = suite.batch_count + 1
             try:
                 bundle = self._crew_builder(technique)
                 static_prompt_snap = self.state.static_prompt
+                execution_feedback = self.state.execution_feedback or None
                 reasoning_input = ReasoningInput(
                     system_prompt=bundle.builder.system_prompt(),
                     task_prompt=bundle.builder.task_description(
@@ -82,10 +85,16 @@ class GenerationFlow(Flow[GenerationFlowState]):
                         remaining_batches=config.max_batches - suite.batch_count,
                         static_context_text=static_prompt_snap.context_text,
                         static_source_text=static_prompt_snap.source_text,
-                        execution_feedback_text=self.state.execution_feedback or None,
+                        execution_feedback_text=execution_feedback,
                     ),
+                    function_path=config.function_path,
+                    execution_feedback_text=execution_feedback,
+                    cached_context_evidence=self.state.cached_context_evidence or None,
+                    disable_agentic_context=getattr(config, "disable_agentic_context", False),
                 )
                 batch = bundle.runner.generate(reasoning_input)
+                if reasoning_input.cached_context_evidence:
+                    self.state.cached_context_evidence = reasoning_input.cached_context_evidence
                 self.state.execution_feedback = ExecuteTestcaseBatchTool(
                     run_context=session.run_context
                 )._run(batch.candidates)
@@ -104,6 +113,11 @@ class GenerationFlow(Flow[GenerationFlowState]):
                     traceback.print_exc()
             finally:
                 session.record_crew_run(bundle.runner if bundle is not None else None)
+                if bundle is not None and bundle.runner.reasoning_trace:
+                    self.state.reasoning_trace.append({
+                        "batch": batch_number,
+                        "steps": list(bundle.runner.reasoning_trace),
+                    })
                 suite = session.active_suite()
                 if stop_reason == "agent_done":
                     stop_reason = session.stop_policy.terminal_reason(suite)
@@ -114,10 +128,12 @@ class GenerationFlow(Flow[GenerationFlowState]):
                     error_message=error_message,
                     static_prompt=self.state.static_prompt,
                     execution_feedback=self.state.execution_feedback,
+                    cached_context_evidence=self.state.cached_context_evidence,
                 )
                 self.state.suite = snapshot.suite
                 self.state.token_ledger = snapshot.token_ledger
                 self.state.execution_feedback = snapshot.execution_feedback
+                self.state.cached_context_evidence = snapshot.cached_context_evidence
                 self.state.stop_reason = snapshot.stop_reason
                 self.state.error_message = snapshot.error_message
                 session.cleanup()
@@ -166,6 +182,7 @@ class GenerationFlowRunner:
             error_message=state.error_message,
             crew_prompt_tokens=tokens.get("prompt"),
             crew_completion_tokens=tokens.get("completion"),
+            reasoning_trace=state.reasoning_trace,
         )
         _print_result_summary(result, self._console)
         return result
@@ -182,5 +199,6 @@ def _config_from_dict(data: dict):
         max_batches=int(data["max_batches"]),
         redundant_streak_limit=int(data["redundant_streak_limit"]),
         fail_streak_limit=int(data["fail_streak_limit"]),
+        disable_agentic_context=bool(data.get("disable_agentic_context", False)),
         run_id=data["run_id"],
     )

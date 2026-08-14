@@ -29,11 +29,11 @@ def test_generate_test_action_rejects_path_metadata():
         )
 
 
-def test_generate_test_batch_accepts_at_most_five_candidates():
+def test_generate_test_batch_accepts_at_most_eight_candidates():
     GenerateTestBatchAction.model_validate(
-        {"candidates": [{"test_name": f"t{i}", "test_body": "f();"} for i in range(5)]}
+        {"candidates": [{"test_name": f"t{i}", "test_body": "f();"} for i in range(8)]}
     )
     with pytest.raises(ValidationError):
         GenerateTestBatchAction.model_validate(
-            {"candidates": [{"test_name": f"t{i}", "test_body": "f();"} for i in range(6)]}
+            {"candidates": [{"test_name": f"t{i}", "test_body": "f();"} for i in range(9)]}
         )

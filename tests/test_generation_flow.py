@@ -63,9 +63,17 @@ def _fake_batch_execution(monkeypatch):
 
 
 class _FakeGenerator:
-    def __init__(self, calls, prompt=1, completion=1, candidate="test"):
+    def __init__(
+        self,
+        calls,
+        prompt=1,
+        completion=1,
+        candidate="test",
+        reasoning_trace=None,
+    ):
         self.calls = calls
         self.candidate = candidate
+        self.reasoning_trace = reasoning_trace or []
         self.usage_metrics = SimpleNamespace(
             prompt_tokens=prompt, completion_tokens=completion
         )
@@ -162,6 +170,37 @@ def test_runner_prefers_flow_usage_metrics_over_zero_ledger(monkeypatch):
     )
     assert result.total_input_tokens == 123
     assert result.total_output_tokens == 45
+
+
+def test_flow_persists_reasoning_trace_in_summary():
+    calls = []
+    result = GenerationFlowRunner(
+        crew_builder=lambda technique: CrewBundle(
+            runner=_FakeGenerator(
+                calls,
+                reasoning_trace=[
+                    {"stage": "chain_of_thought", "content": "step 1; step 2"}
+                ],
+            ),
+            builder=_FakeBuilder(),
+        ),
+        static_fetcher=lambda path, version: StaticPromptData("context", "source"),
+    ).run(
+        GenerationConfig(
+            function_path="/f.cpp::f()",
+            prompt_variant="cot",
+            max_batches=1,
+            run_id="reasoning-trace",
+        )
+    )
+    assert result.to_summary_dict()["reasoning_trace"] == [
+        {
+            "batch": 1,
+            "steps": [
+                {"stage": "chain_of_thought", "content": "step 1; step 2"}
+            ],
+        }
+    ]
 
 
 def test_flow_records_usage_when_hard_stop_interrupts_execution():

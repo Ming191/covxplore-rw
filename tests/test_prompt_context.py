@@ -30,6 +30,14 @@ class FakeClient:
                         },
                     }
                 ],
+                "externalDeclarations": [
+                    {
+                        "kind": "enum",
+                        "name": "Hjson::Settings",
+                        "source": "enum Settings { Strict, Permissive };",
+                        "usedBy": ["focal", "helper:is_strict"],
+                    }
+                ],
                 "conditions": [
                     {
                         "nodeId": 28,
@@ -38,7 +46,7 @@ class FakeClient:
                         "reads": [{"base": "p", "field": "ch"}],
                     }
                 ],
-                "helperEffects": [
+                "helpers": [
                     {
                         "signature": "bool Hjson::_next(Hjson::Parser*)",
                         "source": "static bool _next(Parser *p) { return ++p->indexNext; }",
@@ -67,6 +75,8 @@ def test_fetch_static_prompt_data_uses_v2_provider(monkeypatch):
     assert "Focal: int f()" in data.context_text
     assert "- Parser* p" in data.context_text
     assert "reads=p->ch" in data.context_text
+    assert "[enum] Hjson::Settings used by focal, helper:is_strict" in data.context_text
+    assert "enum Settings { Strict, Permissive };" in data.context_text
     assert "static bool _next(Parser *p)" in data.context_text
     assert "legacy context" not in data.context_text
 

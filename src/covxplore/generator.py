@@ -72,6 +72,7 @@ class GenerationConfig:
     fail_streak_limit: int = field(
         default_factory=lambda: get_settings().fail_streak_limit
     )
+    disable_agentic_context: bool = False
     run_id: str | None = None
 
     def __post_init__(self):
@@ -100,6 +101,7 @@ class GenerationConfig:
             "max_batches": self.max_batches,
             "redundant_streak_limit": self.redundant_streak_limit,
             "fail_streak_limit": self.fail_streak_limit,
+            "disable_agentic_context": self.disable_agentic_context,
         }
 
 
@@ -114,6 +116,7 @@ class GenerationResult:
     crew_prompt_tokens: int | None = None
     crew_completion_tokens: int | None = None
     experiment: ExperimentMetadata | None = None
+    reasoning_trace: list[dict[str, object]] = field(default_factory=list)
     _elapsed_sec: float = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -180,6 +183,7 @@ class GenerationResult:
             "experiment": asdict(self.experiment),
             "stop_reason": self.stop_reason,
             "error": self.error_message,
+            "reasoning_trace": self.reasoning_trace,
             "metrics": {
                 "statement_coverage_pct": round(metrics.statement_pct, 4),
                 "branch_coverage_pct": round(metrics.branch_pct, 4),
