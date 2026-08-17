@@ -29,7 +29,7 @@ class OpenAICompatibleStructuredLLM:
         self._http = httpx.Client(
             base_url=base_url.rstrip("/") + "/",
             timeout=timeout,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
         )
         self._usage = UsageMetrics()
 
