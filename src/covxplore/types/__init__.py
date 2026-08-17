@@ -4,6 +4,7 @@ from covxplore.types.unvisited_statement import UnvisitedStatement
 from covxplore.types.unvisited_branch import UnvisitedBranch
 from covxplore.types.coverage_detail import CoverageDetail
 from covxplore.types.trace_summary import RuntimeValue, TargetFunctionConditionStep, TraceSummary
+from covxplore.types.path_prediction import ExpectedPathStep, PathPrediction
 from covxplore.types.test_result import TestResult
 from covxplore.types.coverage_metrics import CoverageMetrics
 from covxplore.types.coverage_gap_input import CoverageGapInput
@@ -17,6 +18,8 @@ __all__ = [
     "CoverageGapInput",
     "CoverageMetrics",
     "CoverageReadable",
+    "ExpectedPathStep",
+    "PathPrediction",
     "RuntimeValue",
     "TargetFunctionConditionStep",
     "TestResult",

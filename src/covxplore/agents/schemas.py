@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from covxplore.types.path_prediction import ExpectedPathStep
+
 
 class GenerateTestAction(BaseModel):
     """One generated C++ test driver body."""
@@ -34,6 +36,17 @@ class GenerateTestAction(BaseModel):
         if value is not None and not value.strip():
             raise ValueError("must not be blank when provided")
         return value
+
+
+class PathGuidedTestAction(GenerateTestAction):
+    path_id: str = Field(..., min_length=1)
+    expected_path: list[ExpectedPathStep] = Field(..., min_length=1)
+
+
+class PathGuidedTestBatchAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidates: list[PathGuidedTestAction] = Field(..., min_length=1, max_length=5)
 
 
 class GenerateTestBatchAction(BaseModel):

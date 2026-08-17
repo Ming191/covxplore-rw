@@ -40,9 +40,9 @@ Settings come from environment variables or `.env` via `covxplore.config.Setting
 
 - `covxplore.main` owns `covxplore-gen`, `covxplore-ablate`, and `covxplore-pipeline`.
 - `covxplore.flows.generation_flow` runs the fixed loop: static context and source, coverage gaps and prior execution feedback, typed LLM batch, AkaUT execution, repeat.
-- `covxplore.crews.test_generation.crew` builds one agent and validates raw JSON with a function guardrail because DeepSeek V4 Flash rejects native `response_format`.
+- `covxplore.generation.runner` exposes `StrategyRunner` (wraps one canonical `ReasoningStrategy`) and `build_crew` for direct, CoT, and CFG path-guided generation.
 - `covxplore.tools.execute_testcase.ExecuteTestcaseBatchTool` validates untrusted test bodies, executes them, merges structural coverage, and raises deterministic stop conditions.
-- `covxplore.prompts` keeps infrastructure fixed and varies only `none`, `cot`, `least_to_most`, `tree_of_thoughts`, or `program_of_thoughts`.
+- `covxplore.prompts` keeps infrastructure fixed and varies only `none`, `cot`, or `path_guided`.
 - `covxplore.generator.GenerationResult` freezes experiment metadata and emits JSON; `covxplore.experiment.flat_row` emits router-training CSV rows.
 - `covxplore.ablation` and `covxplore.pipeline` run repeated treatment matrices.
 

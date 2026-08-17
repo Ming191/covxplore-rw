@@ -1,6 +1,6 @@
 # Covxplore
 
-Covxplore generates C/C++ test drivers with one CrewAI agent and compares five reasoning treatments under fixed context, coverage-gap, execution-feedback, and batch infrastructure.
+Covxplore generates C/C++ test drivers with one CrewAI agent and compares direct, Chain-of-Thought, and CFG path-guided treatments under fixed context, coverage-gap, execution-feedback, and batch infrastructure.
 
 ## Installation
 
@@ -35,7 +35,7 @@ uv run covxplore-ablate \
 # Selected treatments
 uv run covxplore-ablate \
   --path "/project/src/foo.cpp::MyNS::bar(int)" \
-  --variants none cot least_to_most tree_of_thoughts program_of_thoughts
+  --variants none cot path_guided
 
 # Multiple functions, one absolute path per line
 uv run covxplore-pipeline \
@@ -45,4 +45,4 @@ uv run covxplore-pipeline \
   --out results
 ```
 
-Available treatments: `none`, `cot`, `least_to_most`, `tree_of_thoughts`, and `program_of_thoughts`.
+Available treatments: `none`, `cot`, and `path_guided`.

@@ -45,8 +45,7 @@ def _request(feedback=None):
     return ContextRequest(
         function_path="/jsonxx/parse_string",
         system_prompt="system",
-        task_prompt="task",
-        execution_feedback_text=feedback,
+        task_prompt="task" + (f"\nPRIOR EXECUTION FEEDBACK:\n{feedback}" if feedback else ""),
     )
 
 

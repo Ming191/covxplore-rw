@@ -1,7 +1,11 @@
 import pytest
 from pydantic import ValidationError
 
-from covxplore.agents.schemas import GenerateTestAction, GenerateTestBatchAction
+from covxplore.agents.schemas import (
+    GenerateTestAction,
+    GenerateTestBatchAction,
+    PathGuidedTestAction,
+)
 
 
 def test_generate_test_action_accepts_strict_no_path_payload():
@@ -24,7 +28,27 @@ def test_generate_test_action_rejects_path_metadata():
             {
                 "test_name": "t1",
                 "test_body": "f();",
-                "expected_path": [{"node_id": 1, "polarity": "TRUE"}],
+                "expected_path": [{"node_id": 1, "outcome": "TRUE"}],
+            }
+        )
+
+
+def test_path_guided_action_requires_compact_path_metadata():
+    action = PathGuidedTestAction.model_validate(
+        {
+            "test_name": "p1",
+            "test_body": "f();",
+            "path_id": "p1",
+            "expected_path": [{"node_id": 6, "outcome": "FALSE"}],
+        }
+    )
+    assert action.path_id == "p1"
+    with pytest.raises(ValidationError):
+        PathGuidedTestAction.model_validate(
+            {
+                "test_body": "f();",
+                "path_id": "p1",
+                "expected_path": [{"node_id": 6, "outcome": "MAYBE"}],
             }
         )
 

@@ -6,6 +6,7 @@ from covxplore.types.coverage_detail import CoverageDetail
 from covxplore.types.unvisited_statement import UnvisitedStatement
 from covxplore.types.unvisited_branch import UnvisitedBranch
 from covxplore.types.trace_summary import TraceSummary
+from covxplore.types.path_prediction import PathPrediction
 
 
 class TestResult(BaseModel):
@@ -19,7 +20,7 @@ class TestResult(BaseModel):
     unvisited_statements: list[UnvisitedStatement] = Field(default_factory=list)
     unvisited_branches: list[UnvisitedBranch] = Field(default_factory=list)
     trace_summary: TraceSummary | None = None
-
+    path_prediction: PathPrediction | None = None
 
     new_structural_coverage: int = 0
     is_redundant: bool = False

@@ -1,5 +1,6 @@
 from covxplore.generation.batch import merge_batch_results
-from covxplore.types import CoverageDetail, TestResult, TestSuite
+from covxplore.tools.execute_testcase import _format_batch_summary
+from covxplore.types import CoverageDetail, TestResult, TestSuite, UnvisitedBranch
 
 
 def _result(name: str, *, stmt: int = 0, branch: int = 0, body: str | None = None) -> TestResult:
@@ -37,3 +38,24 @@ def test_merge_orders_by_structural_gain():
     summary = merge_batch_results(suite, [small, large])
     assert summary.accepted == [large]
     assert summary.rejected_redundant == [small]
+
+
+def test_execution_feedback_does_not_repeat_coverage_guidance():
+    suite = TestSuite(function_path="/f.cpp::f()")
+    result = _result("seed", stmt=1, branch=1)
+    result.unvisited_branches = [
+        UnvisitedBranch(
+            node_id=2,
+            condition="x > 0",
+            true_visited=True,
+            false_visited=False,
+        )
+    ]
+    summary = merge_batch_results(suite, [result])
+
+    feedback = _format_batch_summary(suite, summary)
+
+    assert "Accepted: seed(PASSED" in feedback
+    assert "Branch coverage:" not in feedback
+    assert "missing:" not in feedback
+    assert "Suite best:" not in feedback

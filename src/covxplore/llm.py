@@ -8,6 +8,7 @@ from crewai import LLM
 
 from covxplore.config import get_settings
 from covxplore.generation.deepseek_thinking import DeepSeekThinkingInterceptor
+from covxplore.structured_llm import OpenAICompatibleStructuredLLM
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,19 @@ class DeepSeekProvider(LLMProvider):
 class LocalProvider(LLMProvider):
     name = "local"
 
+    def build(
+        self, settings: Any, model: str | None = None
+    ) -> OpenAICompatibleStructuredLLM:
+        config = self.resolve(settings, model)
+        return OpenAICompatibleStructuredLLM(
+            model=config.model.removeprefix("openai/"),
+            base_url=config.base_url,
+            api_key=config.api_key,
+            timeout=settings.llm_timeout_sec,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.max_tokens,
+        )
+
     def resolve(self, settings: Any, model: str | None = None) -> LLMConfig:
         resolved = (model or settings.local_model).strip()
         return LLMConfig(
@@ -85,6 +99,6 @@ def get_llm_provider(name: str | None) -> LLMProvider:
         ) from exc
 
 
-def build_llm(model: str | None = None) -> LLM:
+def build_llm(model: str | None = None) -> LLM | OpenAICompatibleStructuredLLM:
     settings = get_settings()
     return get_llm_provider(settings.llm_provider).build(settings, model)

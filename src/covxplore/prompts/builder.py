@@ -26,7 +26,6 @@ class PromptBuilder:
         execution_feedback_text: str | None = None,
         **_: object,
     ) -> str:
-        metrics = suite.coverage.metrics(suite.tests)
         gap = GapAnalyzer().analyze(
             suite.coverage.gap_input(suite.tests, suite.batch_count)
         ).text
@@ -34,7 +33,11 @@ class PromptBuilder:
             catalog_text("task", "description").format(
                 function_path=function_path,
                 workflow=str(load_catalog()["workflow"]),
-                path_requirement=" (omit expected_path)",
+                batch_requirement=(
+                    "Return 1-5 candidates, at most one per provided path_id."
+                    if self.technique == ReasoningTechnique.PATH_GUIDED
+                    else "Return 1-8 focused candidates and omit path metadata."
+                ),
             ),
             catalog_text("task", "context").format(content=static_context_text),
             catalog_text("task", "source").format(content=static_source_text),
@@ -44,8 +47,6 @@ class PromptBuilder:
         parts.append(
             catalog_text("sections", "coverage_guidance").format(
                 coverage_gap=gap,
-                stmt_pct=f"{metrics.statement_pct * 100:.0f}",
-                branch_pct=f"{metrics.branch_pct * 100:.0f}",
                 remaining_batches=remaining_batches,
             )
         )

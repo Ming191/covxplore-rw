@@ -9,12 +9,21 @@ from typing import TypeVar
 from crewai import LLM
 from pydantic import BaseModel
 
-from covxplore.agents.schemas import GenerateTestBatchAction
+from covxplore.agents.schemas import GenerateTestBatchAction, PathGuidedTestBatchAction
 from covxplore.llm import build_llm
+from covxplore.prompts.catalog import catalog_text
 from covxplore.prompts.config import ReasoningTechnique
 from covxplore.reasoning.context_agent import ContextAgent, ContextRequest
 from covxplore.reasoning.context_tools import AkaUTContextTools
-from covxplore.reasoning.schemas import ChainOfThoughtResult, PathGuidedResult
+from covxplore.reasoning.schemas import (
+    ChainOfThoughtResult,
+    EncodedChainOfThoughtResult,
+    EncodedPathGuidedResult,
+    EncodedTestBatchResult,
+    PathGuidedCandidate,
+    PathGuidedResult,
+)
+from covxplore.api_client import ExecutionPath
 
 T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
@@ -44,15 +53,27 @@ class ReasoningStrategy(ABC):
     def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
         """Generate one test batch without executing it."""
 
-    def _json_call(self, prompt: str, schema: type[T]) -> T:
+    def _json_call(
+        self,
+        prompt: str,
+        schema: type[T],
+        system_prompt: str = "Return only the requested JSON object.",
+    ) -> T:
         messages = [
-            {"role": "system", "content": "Return only the requested JSON object."},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ]
         error = ""
         raw_response = ""
         for _ in range(2):
-            response = self.llm.call(messages)
+            response = self.llm.call(
+                messages,
+                response_model=(
+                    schema if getattr(self.llm, "native_structured_output", False) else None
+                ),
+            )
+            if isinstance(response, schema):
+                return response
             raw_response = str(response)
             try:
                 return schema.model_validate_json(_json_object(raw_response))
@@ -85,76 +106,77 @@ class ReasoningStrategy(ABC):
                 function_path=reasoning_input.function_path,
                 system_prompt=reasoning_input.system_prompt,
                 task_prompt=reasoning_input.task_prompt,
-                execution_feedback_text=reasoning_input.execution_feedback_text,
             )
         )
         reasoning_input.cached_context_evidence = evidence
         return evidence
 
     @staticmethod
-    def _evidence_text(*parts: str) -> str:
-        return "\n\n".join(part for part in parts if part)
-
-    @staticmethod
     def _prompt_with_context(reasoning_input: ReasoningInput, evidence: str) -> str:
-        suffix = f"\n\nAGENTIC CONTEXT EVIDENCE:\n{evidence}" if evidence else ""
-        return f"{reasoning_input.system_prompt}\n\n{reasoning_input.task_prompt}{suffix}"
+        if not evidence:
+            return reasoning_input.task_prompt
+        return f"{reasoning_input.task_prompt}\n\n{catalog_text('reasoning', 'context_evidence').format(evidence=evidence)}"
 
-    @classmethod
-    def _batch_prompt(
-        cls,
-        reasoning_input: ReasoningInput,
-        context_evidence: str = "",
-        reasoning_evidence: str = "",
-    ) -> str:
-        suffix = (
-            f"\n\nREASONING EVIDENCE:\n{reasoning_evidence}"
-            if reasoning_evidence
-            else ""
-        )
+    def _encoded_output(self) -> str:
         return (
-            f"{cls._prompt_with_context(reasoning_input, context_evidence)}{suffix}\n\n"
-            "Return JSON matching: "
-            '{"candidates":[{"test_name":"...","test_body":"..."}]}.'
+            catalog_text("reasoning", "encoded_output")
+            if getattr(self.llm, "native_structured_output", False)
+            else ""
         )
 
 
 class DirectStrategy(ReasoningStrategy):
     def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
-        context = self._context_evidence(reasoning_input)
-        return self._json_call(
-            self._batch_prompt(reasoning_input, context), GenerateTestBatchAction
+        encoded = getattr(self.llm, "native_structured_output", False)
+        prompt = "\n\n".join(
+            filter(
+                None,
+                (
+                    self._prompt_with_context(
+                        reasoning_input, self._context_evidence(reasoning_input)
+                    ),
+                    catalog_text("reasoning", "direct"),
+                    self._encoded_output(),
+                ),
+            )
         )
+        result = self._json_call(
+            prompt,
+            EncodedTestBatchResult if encoded else GenerateTestBatchAction,
+            reasoning_input.system_prompt,
+        )
+        return result.decode() if encoded else result
 
 
 class ChainOfThoughtStrategy(ReasoningStrategy):
     def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
         context = self._context_evidence(reasoning_input)
-        prompt = (
-            f"{self._prompt_with_context(reasoning_input, context)}\n\n"
-            "Before writing tests, build a coverage plan in this exact order inside reasoning:\n"
-            "1. Resolve relevant constants and helper predicates. Enumerate every focal condition outcome "
-            "and mark it reachable or unreachable with a concrete reason.\n"
-            "2. For each reachable outcome, derive concrete input/state constraints, including loop "
-            "iterations and nested/helper calls that may re-enter the focal function.\n"
-            "3. Propose candidates and map each candidate to the condition outcomes it should cover.\n"
-            "4. Order candidates, compute expected marginal coverage against the union of earlier "
-            "candidates, and remove or merge any candidate whose outcomes are a subset. Different input "
-            "syntax alone is not diversity.\n"
-            "5. Check that each remaining test body is compilable under the supplied harness contract. "
-            "Do not claim complete reachable coverage unless every reachable outcome is mapped.\n"
-            "Then provide the final batch. Return JSON matching "
-            '{"reasoning":"numbered coverage plan with reachability, constraints, candidate mapping, '
-            'overlap check, and compile check",'
-            '"candidates":[{"test_name":"...","test_body":"..."}]}. '
+        encoded = getattr(self.llm, "native_structured_output", False)
+        prompt = "\n\n".join(
+            filter(
+                None,
+                (
+                    self._prompt_with_context(reasoning_input, context),
+                    catalog_text("reasoning", "cot"),
+                    self._encoded_output(),
+                ),
+            )
         )
-        result = self._json_call(prompt, ChainOfThoughtResult)
+        result = self._json_call(
+            prompt,
+            EncodedChainOfThoughtResult if encoded else ChainOfThoughtResult,
+            reasoning_input.system_prompt,
+        )
         self.reasoning_trace.append({"stage": "chain_of_thought", "content": result.reasoning})
-        return GenerateTestBatchAction(candidates=result.candidates)
+        return GenerateTestBatchAction(
+            candidates=[candidate.decode() for candidate in result.candidates]
+            if encoded
+            else result.candidates
+        )
 
 
 class PathGuidedStrategy(ReasoningStrategy):
-    def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
+    def generate_batch(self, reasoning_input: ReasoningInput) -> PathGuidedTestBatchAction:
         context = self._context_evidence(reasoning_input)
         from covxplore.api_client import AkaUTClient
 
@@ -164,7 +186,7 @@ class PathGuidedStrategy(ReasoningStrategy):
             ).execution_paths
         if not paths:
             raise ValueError("AkaUT returned no CFG execution paths")
-        uncovered_targets = _uncovered_targets(reasoning_input.execution_feedback_text)
+        uncovered_targets = _uncovered_targets(reasoning_input.task_prompt)
         selected = [
             path
             for path in paths
@@ -178,47 +200,75 @@ class PathGuidedStrategy(ReasoningStrategy):
                 path.target_outcome,
             )
         )
+        path_catalog = {
+            f"p{index + 1}": path
+            for index, path in enumerate(selected[:5])
+        }
         payload = [
             {
-                "target_node_id": path.target_node_id,
-                "target_condition": path.target_condition,
-                "target_outcome": path.target_outcome,
-                "execution_sequence": [
-                    {
-                        "node_id": step.node_id,
-                        "condition": step.condition,
-                        "required_outcome": step.required_outcome,
-                    }
+                "id": path_id,
+                "target": f"{path.target_node_id}{path.target_outcome[0]}",
+                "condition": path.target_condition,
+                "path": ">".join(
+                    f"{step.node_id}{step.required_outcome[0]}"
                     for step in path.execution_sequence
-                ],
+                ),
             }
-            for path in selected[:5]
+            for path_id, path in path_catalog.items()
         ]
-        result = self._json_call(
-            f"{self._prompt_with_context(reasoning_input, context)}\n\n"
-            "CFG-DERIVED EXECUTION PATHS:\n"
-            f"{json.dumps(payload, ensure_ascii=False)}\n\n"
-            "Generate one test per listed target path. Satisfy the ordered outcomes exactly; earlier "
-            "conditions are mandatory reachability constraints. Do not add Chain-of-Thought or a "
-            "reasoning field. Avoid a candidate if another listed path's test necessarily covers its "
-            "target. Return one JSON object, never a JSON array. For JSON-like C++ input, use raw "
-            'literals such as R"AKA({...})AKA", never escaped quotes. Return JSON matching '
-            '{"candidates":[{"test_name":"...","test_body":"...",'
-            '"target_node_id":1,"target_outcome":"TRUE"}]}.',
-            PathGuidedResult,
+        encoded = getattr(self.llm, "native_structured_output", False)
+        output_contract = (
+            self._encoded_output()
+            if encoded
+            else catalog_text("reasoning", "path_output")
         )
+        result = self._json_call(
+            "\n\n".join(
+                (
+                    self._prompt_with_context(reasoning_input, context),
+                    catalog_text("reasoning", "path_guided").format(
+                        paths=json.dumps(
+                            payload, ensure_ascii=False, separators=(",", ":")
+                        ),
+                        output_contract=output_contract,
+                    ),
+                )
+            ),
+            EncodedPathGuidedResult if encoded else PathGuidedResult,
+            reasoning_input.system_prompt,
+        )
+        if encoded:
+            result = result.decode()
         self.reasoning_trace.append(
             {
                 "stage": "cfg_execution_paths",
                 "content": json.dumps(payload, ensure_ascii=False),
             }
         )
-        return GenerateTestBatchAction(
+        return PathGuidedTestBatchAction(
             candidates=[
-                {"test_name": candidate.test_name, "test_body": candidate.test_body}
+                self._resolve_candidate(candidate, path_catalog)
                 for candidate in result.candidates
             ]
         )
+
+    @staticmethod
+    def _resolve_candidate(
+        candidate: PathGuidedCandidate,
+        path_catalog: dict[str, ExecutionPath],
+    ) -> dict:
+        path = path_catalog.get(candidate.path_id)
+        if path is None:
+            raise ValueError(f"Unknown path_id {candidate.path_id!r}")
+        return {
+            "test_name": candidate.test_name,
+            "test_body": candidate.test_body,
+            "path_id": candidate.path_id,
+            "expected_path": [
+                {"node_id": step.node_id, "outcome": step.required_outcome}
+                for step in path.execution_sequence
+            ],
+        }
 
 
 _STRATEGIES: dict[ReasoningTechnique, type[ReasoningStrategy]] = {
@@ -243,9 +293,11 @@ def _uncovered_targets(feedback: str | None) -> set[tuple[int, str]]:
 
     targets: set[tuple[int, str]] = set()
     for node_id, outcomes in re.findall(
-        r"node:(\d+).*?missing=([A-Z,]+)", feedback
+        r"node(?:Id=|:)(\d+).*?missing:\s*([A-Z]+(?:\s*,\s*[A-Z]+)*)", feedback
     ):
-        targets.update((int(node_id), outcome) for outcome in outcomes.split(","))
+        targets.update(
+            (int(node_id), outcome.strip()) for outcome in outcomes.split(",")
+        )
     return targets
 
 

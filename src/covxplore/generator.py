@@ -227,6 +227,8 @@ class GenerationResult:
             summary["trace_summary"] = test.trace_summary.model_dump(
                 by_alias=True, exclude_none=True
             )
+        if test.path_prediction is not None:
+            summary["path_prediction"] = test.path_prediction.model_dump(mode="json")
         return summary
 
 

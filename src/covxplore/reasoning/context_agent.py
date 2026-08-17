@@ -16,7 +16,6 @@ class ContextRequest:
     function_path: str
     system_prompt: str
     task_prompt: str
-    execution_feedback_text: str | None = None
 
 
 class ContextAgent:
@@ -114,7 +113,6 @@ class ContextAgent:
         searches_left: int,
         source_fetches_left: int,
     ) -> str:
-        feedback = request.execution_feedback_text or "None"
         evidence_text = "\n\n".join(evidence) or "None"
         allowed = ", ".join(allowed_actions)
         return f"""{request.system_prompt}
@@ -127,9 +125,6 @@ FOCAL FUNCTION PATH:
 
 GENERATION TASK AND PRELOADED CONTEXT:
 {request.task_prompt}
-
-PRIOR EXECUTION FEEDBACK:
-{feedback}
 
 DISCOVERED EVIDENCE:
 {evidence_text}
