@@ -50,7 +50,16 @@ class DriverContractValidator:
                 )
             )
 
-        if _has_value_return(tree.root_node, source):
+        if _has_node_type(tree.root_node, "function_definition"):
+            violations.append(
+                ContractViolation(
+                    code="NESTED_FUNCTION_DEFINITION",
+                    message="Test body is inserted into a function; use a non-capturing lambda instead of defining a function.",
+                    severity="ERROR",
+                )
+            )
+
+        if _has_top_level_value_return(tree.root_node, source):
             violations.append(
                 ContractViolation(
                     code="RETURN_VALUE",
@@ -131,10 +140,12 @@ def _has_main_definition(node: Node, source: bytes) -> bool:
     return any(_has_main_definition(child, source) for child in node.children)
 
 
-def _has_value_return(node: Node, source: bytes) -> bool:
+def _has_top_level_value_return(node: Node, source: bytes) -> bool:
+    if node.type in {"function_definition", "lambda_expression"}:
+        return False
     if node.type == "return_statement":
         return _node_text(node, source).strip() != "return;"
-    return any(_has_value_return(child, source) for child in node.children)
+    return any(_has_top_level_value_return(child, source) for child in node.children)
 
 
 def _function_declarator_name(node: Node, source: bytes) -> str | None:

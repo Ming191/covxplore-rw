@@ -101,12 +101,6 @@ def _refs_text(refs: list[dict[str, Any]]) -> str:
     )
 
 
-def _cap_context(text: str, limit: int = 12000) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n... [legacy /api/context truncated]"
-
-
 class StaticContextProvider(ABC):
     @abstractmethod
     def context_text(self, client, function_path: str) -> str:
@@ -115,7 +109,7 @@ class StaticContextProvider(ABC):
 
 class LegacyContextProvider(StaticContextProvider):
     def context_text(self, client, function_path: str) -> str:
-        return _cap_context(client.get_function_context(function_path).context)
+        return client.get_function_context(function_path).context
 
 
 class StructuredContextProvider(StaticContextProvider):

@@ -38,8 +38,23 @@ def test_main_text_in_comment_or_string_is_not_rejected():
     assert "HAS_MAIN" not in codes
 
 
+def test_nested_function_definition_is_rejected():
+    codes = _codes("int compare(int a, int b) { return a - b; }\ntarget();")
+    assert codes["NESTED_FUNCTION_DEFINITION"] == "ERROR"
+
+
 def test_returning_a_value_is_rejected():
     assert _codes("if (failed) return false;")["RETURN_VALUE"] == "ERROR"
+
+
+def test_nested_function_value_return_is_not_a_harness_return():
+    codes = _codes("int compare(int a, int b) { return a - b; }\ntarget();")
+    assert "RETURN_VALUE" not in codes
+
+
+def test_lambda_value_return_is_allowed():
+    codes = _codes("auto compare = [](int a, int b) { return a - b; };\ntarget();")
+    assert "RETURN_VALUE" not in codes
 
 
 def test_void_return_is_allowed():
