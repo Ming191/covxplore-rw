@@ -176,99 +176,61 @@ class ChainOfThoughtStrategy(ReasoningStrategy):
 
 
 class PathGuidedStrategy(ReasoningStrategy):
-    def generate_batch(self, reasoning_input: ReasoningInput) -> PathGuidedTestBatchAction:
+    def generate_batch(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
         context = self._context_evidence(reasoning_input)
         from covxplore.api_client import AkaUTClient
 
         with AkaUTClient() as client:
-            paths = client.get_node_conditions(
+            conditions = client.get_node_conditions(
                 reasoning_input.function_path, coverage_type="BRANCH"
-            ).execution_paths
-        if not paths:
-            raise ValueError("AkaUT returned no CFG execution paths")
+            ).conditions
+
+        if not conditions:
+            logger.warning("AkaUT returned no conditions, falling back to ChainOfThought")
+            return ChainOfThoughtStrategy(self.llm).generate_batch(reasoning_input)
+
         uncovered_targets = _uncovered_targets(reasoning_input.task_prompt)
-        selected = [
-            path
-            for path in paths
-            if not uncovered_targets
-            or (path.target_node_id, path.target_outcome) in uncovered_targets
-        ]
-        selected.sort(
-            key=lambda path: (
-                -len(path.execution_sequence),
-                path.target_node_id,
-                path.target_outcome,
+        catalog_lines: list[str] = []
+        for i, cond in enumerate(conditions):
+            node_id = cond.node_id
+            t_status = "UNCOVERED" if not uncovered_targets or (node_id, "TRUE") in uncovered_targets else "COVERED"
+            f_status = "UNCOVERED" if not uncovered_targets or (node_id, "FALSE") in uncovered_targets else "COVERED"
+            catalog_lines.append(
+                f"- [N{i+1}] Node {node_id} (Line ~{cond.line_in_function}): `{cond.condition}` -> TRUE [{t_status}], FALSE [{f_status}]"
             )
-        )
-        path_catalog = {
-            f"p{index + 1}": path
-            for index, path in enumerate(selected[:5])
-        }
-        payload = [
-            {
-                "id": path_id,
-                "target": f"{path.target_node_id}{path.target_outcome[0]}",
-                "condition": path.target_condition,
-                "path": ">".join(
-                    f"{step.node_id}{step.required_outcome[0]}"
-                    for step in path.execution_sequence
-                ),
-            }
-            for path_id, path in path_catalog.items()
-        ]
+
+        node_catalog_text = "\n".join(catalog_lines)
         encoded = getattr(self.llm, "native_structured_output", False)
-        output_contract = (
-            self._encoded_output()
-            if encoded
-            else catalog_text("reasoning", "path_output")
-        )
-        result = self._json_call(
-            "\n\n".join(
+        output_contract = self._encoded_output() if encoded else ""
+
+        prompt = "\n\n".join(
+            filter(
+                None,
                 (
                     self._prompt_with_context(reasoning_input, context),
                     catalog_text("reasoning", "path_guided").format(
-                        paths=json.dumps(
-                            payload, ensure_ascii=False, separators=(",", ":")
-                        ),
+                        node_catalog=node_catalog_text,
                         output_contract=output_contract,
                     ),
-                )
-            ),
-            EncodedPathGuidedResult if encoded else PathGuidedResult,
-            reasoning_input.system_prompt,
-        )
-        if encoded:
-            result = result.decode()
-        self.reasoning_trace.append(
-            {
-                "stage": "cfg_execution_paths",
-                "content": json.dumps(payload, ensure_ascii=False),
-            }
-        )
-        return PathGuidedTestBatchAction(
-            candidates=[
-                self._resolve_candidate(candidate, path_catalog)
-                for candidate in result.candidates
-            ]
+                ),
+            )
         )
 
-    @staticmethod
-    def _resolve_candidate(
-        candidate: PathGuidedCandidate,
-        path_catalog: dict[str, ExecutionPath],
-    ) -> dict:
-        path = path_catalog.get(candidate.path_id)
-        if path is None:
-            raise ValueError(f"Unknown path_id {candidate.path_id!r}")
-        return {
-            "test_name": candidate.test_name,
-            "test_body": candidate.test_body,
-            "path_id": candidate.path_id,
-            "expected_path": [
-                {"node_id": step.node_id, "outcome": step.required_outcome}
-                for step in path.execution_sequence
-            ],
-        }
+        result = self._json_call(
+            prompt,
+            EncodedChainOfThoughtResult if encoded else ChainOfThoughtResult,
+            reasoning_input.system_prompt,
+        )
+
+        self.reasoning_trace.append(
+            {"stage": "self_proposed_path_planning", "content": result.reasoning}
+        )
+        return GenerateTestBatchAction(
+            candidates=[candidate.decode() for candidate in result.candidates]
+            if encoded
+            else result.candidates
+        )
+
 
 
 _STRATEGIES: dict[ReasoningTechnique, type[ReasoningStrategy]] = {
@@ -299,6 +261,44 @@ def _uncovered_targets(feedback: str | None) -> set[tuple[int, str]]:
             (int(node_id), outcome.strip()) for outcome in outcomes.split(",")
         )
     return targets
+
+
+def _sample_diverse_paths(paths: list[ExecutionPath], max_paths: int = 6) -> list[ExecutionPath]:
+    """Sample diverse execution paths across decision points and outcome polarities."""
+    if not paths:
+        return []
+    if len(paths) <= max_paths:
+        return paths
+
+    # Prioritize False / early-exit divergences across different AST nodes
+    divergences = [p for p in paths if p.target_outcome.upper().startswith("F")]
+    divergences.sort(key=lambda p: (len(p.execution_sequence), p.target_node_id))
+
+    deepest = sorted(paths, key=lambda p: -len(p.execution_sequence))
+
+    selected: list[ExecutionPath] = []
+    seen_nodes: set[int] = set()
+
+    for p in divergences:
+        if p.target_node_id not in seen_nodes:
+            selected.append(p)
+            seen_nodes.add(p.target_node_id)
+        if len(selected) >= max_paths - 2:
+            break
+
+    # Add deep terminal paths (positive/deep executions)
+    for p in deepest:
+        if p not in selected and len(selected) < max_paths:
+            selected.append(p)
+
+    # Fallback to remaining paths if under quota
+    for p in paths:
+        if len(selected) >= max_paths:
+            break
+        if p not in selected:
+            selected.append(p)
+
+    return selected
 
 
 def _json_object(text: str) -> str:

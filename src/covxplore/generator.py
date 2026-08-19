@@ -207,6 +207,8 @@ class GenerationResult:
             "rejected_tests": [self._test_summary(test) for test in self.suite.rejected_tests],
         }
 
+    to_dict = to_summary_dict
+
     @staticmethod
     def _test_summary(test) -> dict:
         summary = {

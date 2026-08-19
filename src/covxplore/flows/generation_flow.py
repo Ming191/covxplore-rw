@@ -18,6 +18,9 @@ from covxplore.tools.execute_testcase import ExecuteTestcaseBatchTool, HardStop
 
 
 
+_console = Console()
+
+
 class GenerationFlow(Flow[GenerationFlowState]):
     def __init__(
         self,

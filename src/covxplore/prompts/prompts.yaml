@@ -71,10 +71,17 @@ reasoning:
     Return JSON matching {"candidates":[{"test_name":"...","test_body":"..."}]}.
   cot: |
     Before finalizing, map reachable condition outcomes to concrete inputs, remove candidates with no marginal coverage, and check every test body against the harness contract. Return JSON matching {"reasoning":"coverage plan","candidates":[{"test_name":"...","test_body":"..."}]}.
-  path_output: |
-    Return JSON matching {"candidates":[{"test_name":"...","test_body":"...","path_id":"p1"}]}.
   path_guided: |
-    CFG-DERIVED EXECUTION PATHS (T=TRUE, F=FALSE):
-    {paths}
+    DECISION & BRANCH NODES CATALOG:
+    {node_catalog}
 
-    Generate one candidate for every listed path_id. Satisfy ordered outcomes exactly. Do not add reasoning. {output_contract}
+    INSTRUCTIONS:
+    1. PATH PROPOSAL & FEASIBILITY ANALYSIS (In reasoning):
+       - Analyze the focal function source code and the decision nodes listed above.
+       - Actively evaluate condition dependencies to identify and eliminate INFEASIBLE execution paths (e.g. contradictory states, mutually exclusive conditions, or unreachable branches).
+       - Propose a minimal set of FEASIBLE, end-to-end execution paths connecting these nodes to maximize branch coverage.
+       - For each proposed feasible path, trace the ordered sequence of decision outcomes (e.g. Path 1: N1(TRUE) -> N2(FALSE) [Scenario: ...]) and formulate the exact input values and stream states required to traverse that path.
+    2. TEST SYNTHESIS (In candidates):
+       - Synthesize concrete, compilable test cases corresponding to your proposed feasible paths.
+       - Ensure test inputs strictly traverse the planned paths while avoiding redundant tests with duplicate coverage. {output_contract}
+    Return JSON matching {{"reasoning":"path feasibility and trajectory plan","candidates":[{{"test_name":"...","test_body":"..."}}]}}.
