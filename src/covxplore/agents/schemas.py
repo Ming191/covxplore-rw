@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
-from covxplore.types.path_prediction import ExpectedPathStep
+from covxplore.types.path_prediction import ExpectedPath, ExpectedPathStep, format_compact_expected_path
 
 
 class GenerateTestAction(BaseModel):
@@ -40,7 +40,11 @@ class GenerateTestAction(BaseModel):
 
 class PathGuidedTestAction(GenerateTestAction):
     path_id: str = Field(..., min_length=1)
-    expected_path: list[ExpectedPathStep] = Field(..., min_length=1)
+    expected_path: ExpectedPath
+
+    @field_serializer("expected_path")
+    def _serialize_expected_path(self, steps: list[ExpectedPathStep]) -> str:
+        return format_compact_expected_path(steps)
 
 
 class PathGuidedTestBatchAction(BaseModel):
@@ -54,12 +58,12 @@ class GenerateTestBatchAction(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    candidates: list[GenerateTestAction] = Field(
+    candidates: list[PathGuidedTestAction | GenerateTestAction] = Field(
         ...,
         min_length=1,
         max_length=8,
         description=(
             "One to eight distinct test candidates. Use fewer when fewer useful "
-            "coverage gaps remain."
+            "coverage gaps remain. Path-guided batches include path_id and expected_path."
         ),
     )

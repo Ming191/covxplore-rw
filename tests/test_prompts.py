@@ -6,15 +6,25 @@ from covxplore.types import TestSuite
 
 
 def test_registry_contains_only_reasoning_techniques():
-    assert get_reasoning_variants() == [technique.value for technique in ReasoningTechnique]
-    assert set(VARIANTS) == set(get_reasoning_variants())
+    canonical = [technique.value for technique in ReasoningTechnique]
+    assert canonical == ["none", "cot", "path_guided"]
+    for technique in ReasoningTechnique:
+        assert get_variant(technique.value) == technique
+    assert get_variant("path-guide") == ReasoningTechnique.PATH_GUIDED
 
 
 def test_reasoning_variants_share_the_same_non_reasoning_prompt():
-    prompts = {name: PromptBuilder(get_variant(name)).system_prompt() for name in VARIANTS}
-    assert len(set(prompts.values())) == 1
-    assert all("untrusted data" in prompt for prompt in prompts.values())
-    assert all("Return only the JSON object" in prompt for prompt in prompts.values())
+    none_prompt = PromptBuilder(get_variant("none")).system_prompt()
+    cot_prompt = PromptBuilder(get_variant("cot")).system_prompt()
+    path_prompt = PromptBuilder(get_variant("path_guided")).system_prompt()
+    assert none_prompt == cot_prompt
+    assert "untrusted data" in none_prompt
+    assert "Return only the JSON object" in none_prompt
+    assert "Do not use C++ raw string literals" in none_prompt
+    assert '"test_body_lines"' in none_prompt
+    assert "expected_path" in path_prompt
+    assert "path_id" in path_prompt
+    assert '"test_body_lines"' in path_prompt
 
 
 def test_task_contains_context_source_gap_and_prior_feedback():
@@ -46,7 +56,7 @@ def test_candidate_limits_match_reasoning_schema():
     path = PromptBuilder(get_variant("path_guided")).task_description(**common)
 
     assert "Return 1-8 focused candidates and omit path metadata." in direct
-    assert "Return 1-5 candidates, at most one per provided path_id." in path
+    assert "Return 2-5 candidates with distinct path_id and compact expected_path" in path
     assert "Suite coverage progress" not in direct
     assert "Each returned batch is executed once" in direct
 

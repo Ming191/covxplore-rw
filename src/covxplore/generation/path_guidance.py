@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 
 from covxplore.agents.schemas import GenerateTestAction, PathGuidedTestAction
+from covxplore.status import TestStatus, is_failure_status, normalize_test_status
 from covxplore.types import (
     PathPrediction,
     RuntimeValue,
@@ -12,6 +13,7 @@ from covxplore.types import (
     TestResult,
     TraceSummary,
 )
+from covxplore.types.path_prediction import format_compact_expected_path
 
 PathKey = tuple[int, str]
 
@@ -95,8 +97,11 @@ class PathGuidance:
 
     @staticmethod
     def mismatch_feedback(results: list[TestResult], limit: int = 3) -> str:
+        """Path-outcome feedback only for executed tests with a usable trace."""
         lines = []
         for result in results:
+            if normalize_test_status(result.status) != TestStatus.PASSED:
+                continue
             prediction = result.path_prediction
             index = prediction.first_unsupported_index if prediction else None
             if prediction is None or prediction.full_path_match is not False or index is None:
@@ -109,7 +114,8 @@ class PathGuidance:
                 f"- {result.test_name} [{prediction.path_id}]: "
                 f"support={prediction.branch_support_pct}%, full_match=false; "
                 f"first_unsupported[{index}]: nodeId={expected.node_id} "
-                f"expected={expected.outcome}, observed={observed or 'NOT_OBSERVED'}"
+                f"expected={expected.outcome}, observed={observed or 'NOT_OBSERVED'}; "
+                f"keep path_id/expected_path and repair inputs so this node outcome matches."
             )
             if values:
                 line += "; runtime: " + ", ".join(
@@ -120,6 +126,31 @@ class PathGuidance:
             if len(lines) >= limit:
                 break
         return "PATH FEEDBACK:\n" + "\n".join(lines) if lines else ""
+
+    @staticmethod
+    def harness_repair_feedback(results: list[TestResult], limit: int = 5) -> str:
+        """Tell the next batch to repair failed bodies before inventing new paths."""
+        lines = []
+        for result in results:
+            status = normalize_test_status(result.status)
+            if not is_failure_status(status):
+                continue
+            prediction = result.path_prediction
+            path_hint = " keep the same path_id and expected_path;"
+            if prediction is not None and prediction.path_id and prediction.expected_path:
+                path_hint = (
+                    f" keep path_id={prediction.path_id} and expected_path="
+                    f"{format_compact_expected_path(prediction.expected_path)};"
+                )
+            lines.append(
+                f"- {result.test_name} ({status.value}):{path_hint} "
+                "fix test_body using Failed execution logs "
+                "(qualify namespaces, match harness contract); "
+                "do not replace with a new path until this compiles and runs."
+            )
+            if len(lines) >= limit:
+                break
+        return "HARNESS REPAIR:\n" + "\n".join(lines) if lines else ""
 
     @staticmethod
     def _diagnostic_at(

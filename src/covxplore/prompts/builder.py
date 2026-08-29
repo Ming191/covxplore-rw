@@ -1,7 +1,7 @@
 """Build the fixed test-generation prompt with one reasoning treatment."""
 
 from covxplore.coverage.gap_analyzer import GapAnalyzer
-from covxplore.prompts.catalog import catalog_text, load_catalog
+from covxplore.prompts.catalog import catalog_text, load_catalog, technique_text
 from covxplore.prompts.config import ReasoningTechnique
 from covxplore.types import TestSuite
 
@@ -11,10 +11,20 @@ class PromptBuilder:
         self.technique = technique
 
     def system_prompt(self) -> str:
-        return self._join([
-            catalog_text("sections", "role"),
-            catalog_text("sections", "output_format"),
-        ])
+        if self.technique == ReasoningTechnique.PATH_GUIDED:
+            return self._join(
+                [
+                    catalog_text("sections", "role"),
+                    catalog_text("sections", "output_format"),
+                    technique_text("path_guided", "output_format"),
+                ]
+            )
+        return self._join(
+            [
+                catalog_text("sections", "role"),
+                catalog_text("sections", "output_format"),
+            ]
+        )
 
     def task_description(
         self,
@@ -29,15 +39,18 @@ class PromptBuilder:
         gap = GapAnalyzer().analyze(
             suite.coverage.gap_input(suite.tests, suite.batch_count)
         ).text
+        if self.technique == ReasoningTechnique.PATH_GUIDED:
+            workflow = technique_text("path_guided", "workflow")
+            batch_requirement = technique_text("path_guided", "batch_requirement")
+        else:
+            workflow = str(load_catalog()["workflow"])
+            batch_requirement = "Return 1-8 focused candidates and omit path metadata."
+
         parts = [
             catalog_text("task", "description").format(
                 function_path=function_path,
-                workflow=str(load_catalog()["workflow"]),
-                batch_requirement=(
-                    "Return 1-5 candidates, at most one per provided path_id."
-                    if self.technique == ReasoningTechnique.PATH_GUIDED
-                    else "Return 1-8 focused candidates and omit path metadata."
-                ),
+                workflow=workflow,
+                batch_requirement=batch_requirement,
             ),
             catalog_text("task", "context").format(content=static_context_text),
             catalog_text("task", "source").format(content=static_source_text),

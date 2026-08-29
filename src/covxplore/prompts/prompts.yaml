@@ -15,14 +15,41 @@ sections:
     Target remaining gaps and avoid candidates with zero expected marginal coverage.
 
   output_format: |
-    Final test batches contain only test_name and test_body. Omit expected_path and target metadata.
+    Final test batches contain only test_name and test_body_lines. Omit expected_path and target metadata.
 
+    test_body_lines is a JSON array of raw C++ source lines inserted into AkaUT's harness in order. Each item is one C++ line: do not write literal `\n`, and do not pre-escape JSON quotes or backslashes. Omit blank lines.
+
+    test_body_lines is raw C++ inserted into AkaUT's harness:
+    1. Do not include headers, main(), namespace declarations, type definitions, or assertions.
+    2. The harness declares no variables; declare every value used.
+    3. Use the exact function signature and qualify namespace symbols. Enum and flag constants belong on the focal class (e.g. `tinyxml2::StrPair::NEEDS_FLUSH`), not on the namespace alone (`tinyxml2::NEEDS_FLUSH` is wrong).
+    4. Prefer `char name[] = {...};` or `std::string name = "...";` for string input. Do not use C++ raw string literals (no `R"(...)"` / `R"delim(...)delim"`).
+    5. Match the input variable type to its length/access operations. For `const char* txt`, use `std::strlen(txt)` and index with `txt[0]`; only call `.c_str()` and `.size()` on a `std::string`.
+    6. AkaUT inserts test_body into a void function. Do not define functions inside test_body; use a non-capturing lambda for a local callback when its expected type permits it. Example: `auto cmp = [](const void* a, const void* b) -> int { return (*(const int*)a - *(const int*)b); };`. Do not use assertions or return with a value; call the focal function for coverage and discard its return value. Call non-static methods through a declared object, never Type::method(...).
+
+    Valid JSON candidate example (adapt symbols and call the focal function):
+    {"test_name":"simple_string","test_body_lines":["char txt[] = {'a','b','c',0};","tinyxml2::StrPair sp;","sp.Set(txt, txt + 3, tinyxml2::StrPair::NEEDS_FLUSH);","sp.GetStr();"]}
+
+  harness: |
     test_body is raw C++ inserted into AkaUT's harness:
     1. Do not include headers, main(), namespace declarations, type definitions, or assertions.
     2. The harness declares no variables; declare every value used.
-    3. Use the exact function signature and qualify namespace symbols.
-    4. For JSON-like C++ input, use a raw string literal such as R"AKA({...})AKA"; raw strings must close exactly as )AKA". Do not use C++ escaped quotes (\") in test_body.
+    3. Use the exact function signature and qualify namespace symbols. Enum and flag constants belong on the focal class, not on the namespace alone.
+    4. Prefer `char name[] = {...};` or `std::string name = "...";` for string input. Do not use C++ raw string literals.
     5. AkaUT inserts test_body into a void function. Do not define functions inside test_body; use a non-capturing lambda for a local callback when its expected type permits it. Example: `auto cmp = [](const void* a, const void* b) -> int { return (*(const int*)a - *(const int*)b); };`. Do not use assertions or return with a value; call the focal function for coverage and discard its return value. Call non-static methods through a declared object, never Type::method(...).
+
+techniques:
+  path_guided:
+    output_format: |
+      Each candidate also has path_id and expected_path.
+      expected_path is a compact string of nodeId+T/F steps joined by '-', e.g. "42T-55F".
+    workflow: >-
+      Use the preloaded context, focal source, prior execution feedback, coverage gaps, and
+      the branch-node catalog. Plan feasible end-to-end paths first, then synthesize tests.
+      When prior feedback has HARNESS REPAIR or Failed execution logs, repair those bodies
+      (same path_id/expected_path) before proposing new paths.
+    batch_requirement: >-
+      Return 2-5 candidates with distinct path_id and compact expected_path (e.g. 6T-10F).
 
 workflow: >-
   Use the complete preloaded context, focal source, prior execution feedback, and current coverage gaps.
@@ -65,23 +92,34 @@ reasoning:
   context_evidence: |
     AGENTIC CONTEXT EVIDENCE:
     {evidence}
-  encoded_output: |
-    Encode test_body with __DQ__ for ", __BS__ for \, and __RAW_BEGIN__/__RAW_END__ for raw literals.
   direct: |
-    Return JSON matching {"candidates":[{"test_name":"...","test_body":"..."}]}.
+    Return JSON matching {"candidates":[{"test_name":"...","test_body_lines":["..."]}]}.
   cot: |
-    Before finalizing, map reachable condition outcomes to concrete inputs, remove candidates with no marginal coverage, and check every test body against the harness contract. Return JSON matching {"reasoning":"coverage plan","candidates":[{"test_name":"...","test_body":"..."}]}.
+    Before finalizing, map reachable condition outcomes to concrete inputs, remove candidates with no marginal coverage, and check every test body against the harness contract. Return JSON matching {"reasoning":"coverage plan","candidates":[{"test_name":"...","test_body_lines":["..."]}]}.
   path_guided: |
     DECISION & BRANCH NODES CATALOG:
     {node_catalog}
 
     INSTRUCTIONS:
+    0. HARNESS FIRST (when PRIOR EXECUTION FEEDBACK has HARNESS REPAIR or Failed execution logs):
+       - Repair those test bodies before proposing new paths.
+       - Keep the same path_id and expected_path; only change test_body_lines.
+       - Qualify every type/symbol with its namespace (e.g. tinyxml2::XMLNode, not bare XMLNode).
+       - Use focal-class constants (e.g. tinyxml2::StrPair::NEEDS_FLUSH), never namespace-only names like tinyxml2::NEEDS_FLUSH.
+       - Follow the harness contract in the system prompt; compile errors beat path planning.
     1. PATH PROPOSAL & FEASIBILITY ANALYSIS (In reasoning):
-       - Analyze the focal function source code and the decision nodes listed above.
-       - Actively evaluate condition dependencies to identify and eliminate INFEASIBLE execution paths (e.g. contradictory states, mutually exclusive conditions, or unreachable branches).
-       - Propose a minimal set of FEASIBLE, end-to-end execution paths connecting these nodes to maximize branch coverage.
-       - For each proposed feasible path, trace the ordered sequence of decision outcomes (e.g. Path 1: N1(TRUE) -> N2(FALSE) [Scenario: ...]) and formulate the exact input values and stream states required to traverse that path.
+       - Analyze the focal function source and the catalog entries above.
+       - Eliminate INFEASIBLE paths (contradictory states, mutually exclusive conditions, unreachable branches).
+       - Propose a minimal set of FEASIBLE end-to-end paths that maximize branch coverage.
+       - For each path, list ordered outcomes using catalog nodeId values only
+         (e.g. Path 1: nodeId=6 TRUE -> nodeId=10 FALSE) and the inputs needed to traverse it.
     2. TEST SYNTHESIS (In candidates):
-       - Synthesize concrete, compilable test cases corresponding to your proposed feasible paths.
-       - Ensure test inputs strictly traverse the planned paths while avoiding redundant tests with duplicate coverage. {output_contract}
-    Return JSON matching {{"reasoning":"path feasibility and trajectory plan","candidates":[{{"test_name":"...","test_body":"..."}}]}}.
+       - Synthesize concrete, compilable tests for those feasible paths.
+       - Each candidate needs a unique path_id and compact expected_path: `<nodeId>T` or `<nodeId>F`
+         joined by `-` (example: `6T-10F`).
+       - CRITICAL: every nodeId in expected_path MUST appear as `nodeId=<id>` in the catalog above.
+         Do NOT use source line numbers, array indices, or any id absent from the catalog.
+       - Prefer longer, non-prefix paths over shorter duplicates; the runner rejects unknown nodeIds
+         and prunes duplicate / proper-prefix paths before execution.
+       - Ensure test inputs traverse the planned paths without redundant coverage.
+    Return JSON matching {{"reasoning":"path feasibility and trajectory plan","candidates":[{{"test_name":"...","test_body_lines":["..."],"path_id":"p1","expected_path":"6T-10F"}}]}}.

@@ -9,15 +9,16 @@ from typing import Any, Mapping
 from crewai.tools import BaseTool
 from pydantic import BaseModel, PrivateAttr, ValidationError
 
-from covxplore.agents.schemas import GenerateTestAction, GenerateTestBatchAction
+from covxplore.agents.schemas import GenerateTestAction, GenerateTestBatchAction, PathGuidedTestAction
 from covxplore.api_client import AkaUTError, ExecuteResult
 from covxplore.config import get_settings
 from covxplore.coverage.gap_analyzer import GapAnalyzer
 from covxplore.driver import AkaUTExecutor, DriverContractValidator, TestCaseExecutor
 from covxplore.driver.contract import ContractViolation
 from covxplore.generation.batch import merge_batch_results
+from covxplore.generation.path_guidance import PathGuidance, PathRejection
 from covxplore.generation.stop_reasons import StopPolicy
-from covxplore.status import TestStatus, is_hard_fail
+from covxplore.status import TestStatus, is_hard_fail, normalize_test_status
 from covxplore.types import (
     CoverageDetail,
     TestResult,
@@ -66,13 +67,14 @@ class RunContext:
 
 
 class ExecuteTestcaseBatchTool(BaseTool):
-    """Validate, execute, and merge one no-path candidate batch."""
+    """Validate, optionally prune path-guided candidates, execute, and merge one batch."""
 
     name: str = "execute_testcase_batch"
     description: str = (
         "Compile and execute one to eight C++ test driver bodies for the active target function. "
-        "Returns accepted tests, redundant rejections, execution failures, suite coverage, "
-        "and remaining gap guidance."
+        "Path-guided candidates are pruned for duplicate/prefix expected paths, then scored against "
+        "execution traces. Returns accepted tests, redundant rejections, path prune/mismatch feedback, "
+        "suite coverage, and remaining gap guidance."
     )
     args_schema: type[BaseModel] = GenerateTestBatchAction
 
@@ -111,19 +113,32 @@ class ExecuteTestcaseBatchTool(BaseTool):
                 f"- {_format_validation_error(error)}" for error in exc.errors()
             )
 
+        prune_result = PathGuidance.prune(list(batch.candidates))
         results: list[TestResult] = []
-        for candidate in batch.candidates:
+        for candidate in prune_result.kept:
             violations = self._validator.validate(candidate.test_body)
             if any(violation.severity == "ERROR" for violation in violations):
-                results.append(_contract_error_result(candidate, violations))
+                result = _contract_error_result(candidate, violations)
             else:
-                results.append(await self._execute_one(suite.function_path, candidate))
+                result = await self._execute_one(suite.function_path, candidate)
+            if isinstance(candidate, PathGuidedTestAction):
+                result.path_prediction = PathGuidance.score(candidate, result.trace_summary)
+            results.append(result)
+
+        if not results and prune_result.rejected:
+            suite.record_batch(False)
+            return _format_batch_summary(suite, None, prune_result.rejected, [])
 
         summary = merge_batch_results(suite, results, cfg.min_suite_size)
         summary.record_redundancy(suite)
         suite.record_batch(bool(results) and all(is_hard_fail(result.status) for result in results))
         _raise_if_hard_stop(suite, cfg)
-        return _format_batch_summary(suite, summary)
+        return _format_batch_summary(
+            suite,
+            summary,
+            prune_result.rejected,
+            results,
+        )
 
     def _run(self, candidates: list[dict] | list[GenerateTestAction]) -> str:
         return asyncio.run(self._arun(candidates))
@@ -201,32 +216,57 @@ def _contract_error_result(
     )
 
 
-def _format_batch_summary(suite: TestSuite, summary) -> str:
+def _format_batch_summary(
+    suite: TestSuite,
+    summary,
+    pruned: list[PathRejection] | None = None,
+    scored_results: list[TestResult] | None = None,
+) -> str:
     lines = ["=== execute_testcase_batch summary ==="]
+    accepted = summary.accepted if summary is not None else []
+    rejected_redundant = summary.rejected_redundant if summary is not None else []
     lines.append(
         "Accepted: "
         + (
             ", ".join(
                 f"{result.test_name}({result.status}, +{result.new_structural_coverage})"
-                for result in summary.accepted
+                for result in accepted
             )
-            if summary.accepted
+            if accepted
             else "none"
         )
     )
     lines.append(
         "Rejected redundant: "
         + (
-            ", ".join(result.test_name for result in summary.rejected_redundant)
-            if summary.rejected_redundant
+            ", ".join(result.test_name for result in rejected_redundant)
+            if rejected_redundant
             else "none"
         )
     )
 
+    if pruned:
+        lines.extend(
+            [
+                "",
+                "PATH PRUNE:",
+                *(f"- {item.diagnostic}" for item in pruned),
+            ]
+        )
+
+    scored = scored_results or accepted
+    harness_feedback = PathGuidance.harness_repair_feedback(scored)
+    if harness_feedback:
+        lines.extend(["", harness_feedback])
+
+    path_feedback = PathGuidance.mismatch_feedback(scored)
+    if path_feedback:
+        lines.extend(["", path_feedback])
+
     failed_logs = [
         _format_execution_log(result)
-        for result in summary.accepted
-        if result.status != TestStatus.PASSED.value
+        for result in scored
+        if normalize_test_status(result.status) != TestStatus.PASSED
     ]
     failed_logs = [log for log in failed_logs if log]
     if failed_logs:
@@ -267,7 +307,7 @@ def _result_from_execute_result(
     return TestResult(
         test_name=raw.test_name,
         test_body=test_body,
-        status=raw.status,
+        status=normalize_test_status(raw.status).value,
         execute_log=raw.execute_log,
         elapsed_ms=elapsed_ms,
         statement_coverage=CoverageDetail(

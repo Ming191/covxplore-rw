@@ -2,80 +2,77 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from covxplore.agents.schemas import GenerateTestAction, GenerateTestBatchAction
+from covxplore.agents.schemas import GenerateTestAction, PathGuidedTestAction
+from covxplore.types.path_prediction import ExpectedPath
 
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def _decode_test_body(value: str) -> str:
-    return (
-        value.replace("__RAW_BEGIN__", 'R"AKA(')
-        .replace("__RAW_END__", ')AKA"')
-        .replace("R__AKA__(", 'R"AKA(')
-        .replace(")__AKA__", ')AKA"')
-        .replace(")AKA__", ')AKA"')
-        .replace("__DQ__", '"')
-        .replace("__BS__", "\\")
-        .replace("__NL__", "\n")
-    )
+class GeneratedTestAction(_StrictModel):
+    """One LLM-produced driver body represented as source lines."""
 
-
-class EncodedTestAction(_StrictModel):
-    test_body_encoded: str = Field(..., min_length=1)
+    test_body_lines: list[str] = Field(..., min_length=1)
     test_name: str | None = None
 
-    def decode(self) -> GenerateTestAction:
+    @field_validator("test_body_lines")
+    @classmethod
+    def _lines_not_blank(cls, value: list[str]) -> list[str]:
+        if not any(line.strip() for line in value):
+            raise ValueError("must contain a non-blank line")
+        return value
+
+    def to_action(self) -> GenerateTestAction:
         return GenerateTestAction(
             test_name=self.test_name,
-            test_body=_decode_test_body(self.test_body_encoded),
+            test_body="\n".join(self.test_body_lines),
         )
 
 
-class EncodedTestBatchResult(_StrictModel):
-    candidates: list[EncodedTestAction] = Field(..., min_length=1, max_length=8)
+class GeneratedTestBatchResult(_StrictModel):
+    candidates: list[GeneratedTestAction] = Field(..., min_length=1, max_length=8)
 
-    def decode(self) -> GenerateTestBatchAction:
-        return GenerateTestBatchAction(candidates=[item.decode() for item in self.candidates])
+    def to_actions(self) -> list[GenerateTestAction]:
+        return [candidate.to_action() for candidate in self.candidates]
 
 
-class EncodedChainOfThoughtResult(_StrictModel):
+class ChainOfThoughtResult(GeneratedTestBatchResult):
     reasoning: str = Field(..., min_length=1)
-    candidates: list[EncodedTestAction] = Field(..., min_length=1, max_length=8)
 
 
-class ChainOfThoughtResult(_StrictModel):
-    reasoning: str = Field(..., min_length=1)
-    candidates: list[GenerateTestAction] = Field(..., min_length=1, max_length=8)
+class PathGuidedGeneratedAction(_StrictModel):
+    """Path-guided candidate with source lines plus path metadata."""
 
-
-class PathGuidedCandidate(GenerateTestAction):
+    test_body_lines: list[str] = Field(..., min_length=1)
+    test_name: str | None = None
     path_id: str = Field(..., min_length=1)
+    expected_path: ExpectedPath
 
+    @field_validator("test_body_lines")
+    @classmethod
+    def _lines_not_blank(cls, value: list[str]) -> list[str]:
+        if not any(line.strip() for line in value):
+            raise ValueError("must contain a non-blank line")
+        return value
 
-class EncodedPathGuidedCandidate(EncodedTestAction):
-    path_id: str = Field(..., min_length=1)
-
-    def decode(self) -> PathGuidedCandidate:
-        return PathGuidedCandidate(
+    def to_action(self) -> PathGuidedTestAction:
+        return PathGuidedTestAction(
             test_name=self.test_name,
-            test_body=_decode_test_body(self.test_body_encoded),
+            test_body="\n".join(self.test_body_lines),
             path_id=self.path_id,
+            expected_path=self.expected_path,
         )
 
 
-class EncodedPathGuidedResult(_StrictModel):
-    candidates: list[EncodedPathGuidedCandidate] = Field(..., min_length=1, max_length=5)
+class PathGuidedPlanningResult(_StrictModel):
+    reasoning: str = Field(..., min_length=1)
+    candidates: list[PathGuidedGeneratedAction] = Field(..., min_length=2, max_length=5)
 
-    def decode(self) -> "PathGuidedResult":
-        return PathGuidedResult(candidates=[item.decode() for item in self.candidates])
-
-
-class PathGuidedResult(_StrictModel):
-    candidates: list[PathGuidedCandidate] = Field(..., min_length=1, max_length=5)
+    def to_actions(self) -> list[PathGuidedTestAction]:
+        return [candidate.to_action() for candidate in self.candidates]
 
 
 class ContextAction(_StrictModel):

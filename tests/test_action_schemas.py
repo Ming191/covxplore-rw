@@ -39,10 +39,20 @@ def test_path_guided_action_requires_compact_path_metadata():
             "test_name": "p1",
             "test_body": "f();",
             "path_id": "p1",
-            "expected_path": [{"node_id": 6, "outcome": "FALSE"}],
+            "expected_path": "6F",
         }
     )
     assert action.path_id == "p1"
+    assert action.expected_path[0].outcome == "FALSE"
+    action_list = PathGuidedTestAction.model_validate(
+        {
+            "test_name": "p1",
+            "test_body": "f();",
+            "path_id": "p1",
+            "expected_path": [{"node_id": 6, "outcome": "FALSE"}],
+        }
+    )
+    assert action_list.expected_path[0].node_id == 6
     with pytest.raises(ValidationError):
         PathGuidedTestAction.model_validate(
             {

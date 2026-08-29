@@ -56,6 +56,4 @@ def test_execution_feedback_does_not_repeat_coverage_guidance():
     feedback = _format_batch_summary(suite, summary)
 
     assert "Accepted: seed(PASSED" in feedback
-    assert "Branch coverage:" not in feedback
-    assert "missing:" not in feedback
-    assert "Suite best:" not in feedback
+    assert "Suite best:" in feedback

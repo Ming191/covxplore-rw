@@ -96,6 +96,7 @@ def test_mismatch_feedback_includes_first_node_runtime_values():
     )
     result = type("Result", (), {})()
     result.test_name = "space_eof"
+    result.status = "PASSED"
     result.trace_summary = trace
     result.path_prediction = PathGuidance.score(candidate, trace)
 
@@ -116,6 +117,7 @@ def test_mismatch_feedback_is_limited_and_omits_full_matches():
         )
         value = type("Result", (), {})()
         value.test_name = name
+        value.status = "PASSED"
         value.trace_summary = trace
         value.path_prediction = PathGuidance.score(candidate, trace)
         return value

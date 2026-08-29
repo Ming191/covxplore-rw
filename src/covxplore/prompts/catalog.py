@@ -31,3 +31,16 @@ def catalog_text(group: str, name: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"Prompt template must be text: {group}.{name}")
     return value.strip()
+
+
+def technique_text(technique: str, name: str) -> str:
+    entry = catalog_value("techniques", technique)
+    if not isinstance(entry, dict):
+        raise TypeError(f"Prompt technique must be a mapping: techniques.{technique}")
+    try:
+        value = entry[name]
+    except KeyError as exc:
+        raise KeyError(f"Prompt template not found: techniques.{technique}.{name}") from exc
+    if not isinstance(value, str):
+        raise TypeError(f"Prompt template must be text: techniques.{technique}.{name}")
+    return value.strip()

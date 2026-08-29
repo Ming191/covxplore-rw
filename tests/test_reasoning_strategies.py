@@ -24,7 +24,7 @@ def _input():
 
 
 def _batch(name="t"):
-    return json.dumps({"candidates": [{"test_name": name, "test_body": "f();"}]})
+    return json.dumps({"candidates": [{"test_name": name, "test_body_lines": ["f();"]}]})
 
 
 def test_direct_uses_one_call():
@@ -34,7 +34,7 @@ def test_direct_uses_one_call():
     assert len(llm.prompts) == 1
 
 
-def test_native_structured_output_accepts_model_instance():
+def test_native_structured_output_preserves_test_body():
     class NativeLLM(FakeLLM):
         native_structured_output = True
 
@@ -47,7 +47,7 @@ def test_native_structured_output_accepts_model_instance():
             "candidates": [
                 {
                     "test_name": "native",
-                    "test_body_encoded": "f(__DQ__x__BS__n__DQ__);",
+                    "test_body_lines": ['std::string input = "A";'],
                 }
             ]
         }
@@ -57,38 +57,28 @@ def test_native_structured_output_accepts_model_instance():
     ).generate_batch(_input())
 
     assert result.candidates[0].test_name == "native"
-    assert result.candidates[0].test_body == 'f("x\\n");'
+    assert result.candidates[0].test_body == 'std::string input = "A";'
 
 
-def test_native_structured_output_decodes_quote_free_raw_literal():
+def test_generated_test_body_joins_lines_without_literal_newlines():
     class NativeLLM(FakeLLM):
         native_structured_output = True
 
         def call(self, messages, response_model=None):
             return response_model.model_validate(
-                {
-                    "candidates": [
-                        {
-                            "test_body_encoded": (
-                                "std::istringstream input(__RAW_BEGIN____DQ____BS__u0041__DQ____RAW_END__);"
-                            )
-                        }
-                    ]
-                }
+                {"candidates": [{"test_body_lines": ["int x = 1;", "f(x);"]}]}
             )
 
     result = get_reasoning_strategy(
         ReasoningTechnique.NONE, NativeLLM([])
     ).generate_batch(_input())
 
-    assert result.candidates[0].test_body == (
-        'std::istringstream input(R"AKA("\\u0041")AKA");'
-    )
+    assert result.candidates[0].test_body == "int x = 1;\nf(x);"
 
 
 def test_cot_requires_explicit_rationale_and_batch():
     llm = FakeLLM([
-        json.dumps({"reasoning": "step 1; step 2", "candidates": [{"test_name": "cot", "test_body": "f();"}]})
+        json.dumps({"reasoning": "step 1; step 2", "candidates": [{"test_name": "cot", "test_body_lines": ["f();"]}]})
     ])
     strategy = get_reasoning_strategy(ReasoningTechnique.COT, llm)
     result = strategy.generate_batch(_input())
@@ -115,28 +105,39 @@ def test_path_guided_uses_cfg_paths_without_cot(monkeypatch):
             return None
 
         def get_node_conditions(self, *_, **__):
-            return type("Result", (), {"execution_paths": [path]})()
+            return type("Result", (), {"conditions": [type("Condition", (), {"node_id": 3, "line_in_function": 1, "condition": "x > 0"})()]})()
 
-    monkeypatch.setattr("covxplore.api_client.AkaUTClient", FakeClient)
+    monkeypatch.setattr("covxplore.reasoning.strategies.AkaUTClient", FakeClient)
     llm = FakeLLM([
         json.dumps({
-            "candidates": [{
-                "test_name": "path",
-                "test_body": "f();",
-                "path_id": "p1",
-            }]
+            "reasoning": "path plan",
+            "candidates": [
+                {
+                    "test_name": "path",
+                    "test_body_lines": ["f();"],
+                    "path_id": "p1",
+                    "expected_path": "3T",
+                },
+                {
+                    "test_name": "path2",
+                    "test_body_lines": ["g();"],
+                    "path_id": "p2",
+                    "expected_path": "3F",
+                },
+            ],
         })
     ])
     strategy = get_reasoning_strategy(ReasoningTechnique.PATH_GUIDED, llm)
     result = strategy.generate_batch(_input())
     assert result.candidates[0].test_name == "path"
+    assert result.candidates[0].test_body == "f();"
     assert result.candidates[0].path_id == "p1"
     assert result.candidates[0].expected_path[0].node_id == 3
-    assert "CFG-DERIVED EXECUTION PATHS (T=TRUE, F=FALSE)" in llm.prompts[0]
-    assert '"path":"3T"' in llm.prompts[0]
-    assert '"expected_path"' not in llm.prompts[0]
-    assert "Generate one candidate for every listed path_id" in llm.prompts[0]
-    assert "Do not add reasoning" in llm.prompts[0]
+    assert len(result.candidates) == 2
+    assert "DECISION & BRANCH NODES CATALOG" in llm.prompts[0]
+    assert "Node 3" in llm.prompts[0]
+    assert '"test_body_lines"' in llm.prompts[0]
+    assert "path feasibility and trajectory plan" in llm.prompts[0]
 
 
 def test_path_guided_filters_from_current_coverage_guidance(monkeypatch):
@@ -158,16 +159,26 @@ def test_path_guided_filters_from_current_coverage_guidance(monkeypatch):
             return None
 
         def get_node_conditions(self, *_, **__):
-            return type("Result", (), {"execution_paths": paths})()
+            return type("Result", (), {"conditions": [type("Condition", (), {"node_id": 3, "line_in_function": 1, "condition": "x > 0"})()]})()
 
-    monkeypatch.setattr("covxplore.api_client.AkaUTClient", FakeClient)
+    monkeypatch.setattr("covxplore.reasoning.strategies.AkaUTClient", FakeClient)
     llm = FakeLLM([
         json.dumps({
-            "candidates": [{
-                "test_name": "false_path",
-                "test_body": "f();",
-                "path_id": "p1",
-            }]
+            "reasoning": "false path plan",
+            "candidates": [
+                {
+                    "test_name": "false_path",
+                    "test_body_lines": ["f();"],
+                    "path_id": "p_false",
+                    "expected_path": "3F",
+                },
+                {
+                    "test_name": "true_path",
+                    "test_body_lines": ["g();"],
+                    "path_id": "p_true",
+                    "expected_path": "3T",
+                },
+            ],
         })
     ])
     strategy = get_reasoning_strategy(ReasoningTechnique.PATH_GUIDED, llm)
@@ -179,9 +190,9 @@ def test_path_guided_filters_from_current_coverage_guidance(monkeypatch):
         )
     )
 
-    assert result.candidates[0].expected_path[0].outcome == "FALSE"
-    assert '"target":"3F"' in llm.prompts[0]
-    assert '"target":"3T"' not in llm.prompts[0]
+    assert result.candidates[0].test_body == "f();"
+    assert "Node 3" in llm.prompts[0]
+    assert "FALSE [UNCOVERED]" in llm.prompts[0]
 
 
 def test_uncovered_targets_parses_rendered_branch_feedback():
