@@ -93,7 +93,7 @@ class GenerationFlow(Flow[GenerationFlowState]):
                     function_path=config.function_path,
                     execution_feedback_text=execution_feedback,
                     cached_context_evidence=self.state.cached_context_evidence or None,
-                    disable_agentic_context=getattr(config, "disable_agentic_context", False),
+                    disable_agentic_context=getattr(config, "disable_agentic_context", True),
                 )
                 batch = bundle.runner.generate(reasoning_input)
                 if reasoning_input.cached_context_evidence:
@@ -202,6 +202,6 @@ def _config_from_dict(data: dict):
         max_batches=int(data["max_batches"]),
         redundant_streak_limit=int(data["redundant_streak_limit"]),
         fail_streak_limit=int(data["fail_streak_limit"]),
-        disable_agentic_context=bool(data.get("disable_agentic_context", False)),
+        disable_agentic_context=bool(data.get("disable_agentic_context", True)),
         run_id=data["run_id"],
     )

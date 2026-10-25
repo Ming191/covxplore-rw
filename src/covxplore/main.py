@@ -42,8 +42,8 @@ def run_generation() -> None:
         help="Override max batches (default: Settings.max_batches).",
     )
     parser.add_argument(
-        "--no-agentic-context", action="store_true",
-        help="Bypass dynamic Agentic context searching tools and use static prompt context only.",
+        "--no-agentic-context", action="store_true", default=True,
+        help="Use only preloaded AKA context and source (default; no ContextAgent calls).",
     )
     args = parser.parse_args()
 
@@ -149,4 +149,3 @@ def run_parallel() -> None:
     )
     summary_path = pipeline.run()
     print(f"\nPipeline complete. Summary: {summary_path}")
-

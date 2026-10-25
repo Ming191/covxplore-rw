@@ -135,7 +135,8 @@ def test_path_guided_uses_cfg_paths_without_cot(monkeypatch):
     assert result.candidates[0].expected_path[0].node_id == 3
     assert len(result.candidates) == 2
     assert "DECISION & BRANCH NODES CATALOG" in llm.prompts[0]
-    assert "Node 3" in llm.prompts[0]
+    assert "nodeId=3" in llm.prompts[0]
+    assert "[N1]" not in llm.prompts[0]
     assert '"test_body_lines"' in llm.prompts[0]
     assert "path feasibility and trajectory plan" in llm.prompts[0]
 
@@ -191,8 +192,78 @@ def test_path_guided_filters_from_current_coverage_guidance(monkeypatch):
     )
 
     assert result.candidates[0].test_body == "f();"
-    assert "Node 3" in llm.prompts[0]
+    assert "nodeId=3" in llm.prompts[0]
     assert "FALSE [UNCOVERED]" in llm.prompts[0]
+
+
+def test_path_guided_drops_unknown_node_ids_and_repairs(monkeypatch):
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def get_node_conditions(self, *_, **__):
+            return type(
+                "Result",
+                (),
+                {
+                    "conditions": [
+                        type(
+                            "Cond",
+                            (),
+                            {"node_id": 6, "condition": "x > 0", "line_in_function": 4},
+                        )()
+                    ]
+                },
+            )()
+
+    monkeypatch.setattr("covxplore.reasoning.strategies.AkaUTClient", FakeClient)
+    llm = FakeLLM(
+        [
+            json.dumps(
+                {
+                    "reasoning": "used line numbers by mistake",
+                    "candidates": [
+                        {
+                            "test_name": "bad",
+                            "test_body_lines": ["f();"],
+                            "path_id": "bad",
+                            "expected_path": "4T",
+                        }
+                    ],
+                }
+            ),
+            json.dumps(
+                {
+                    "reasoning": "fixed to catalog nodeId",
+                    "candidates": [
+                        {
+                            "test_name": "good",
+                            "test_body_lines": ["f();"],
+                            "path_id": "good",
+                            "expected_path": "6T",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    strategy = get_reasoning_strategy(ReasoningTechnique.PATH_GUIDED, llm)
+    result = strategy.generate_batch(
+        ReasoningInput(
+            system_prompt="system",
+            task_prompt="task",
+            function_path="/x.cpp::f()",
+            disable_agentic_context=True,
+        )
+    )
+    assert result.candidates[0].path_id == "good"
+    assert result.candidates[0].expected_path[0].node_id == 6
+    assert any(step["stage"] == "expected_path_node_validation" for step in strategy.reasoning_trace)
+    assert any(step["stage"] == "self_proposed_path_planning_repair" for step in strategy.reasoning_trace)
+    assert "Allowed nodeId values only" in llm.prompts[1]
 
 
 def test_uncovered_targets_parses_rendered_branch_feedback():
@@ -217,6 +288,7 @@ def test_cached_context_evidence_skips_agent_call():
         task_prompt="task",
         function_path="test_func",
         cached_context_evidence="PRECACHED EVIDENCE",
+        disable_agentic_context=False,
     )
     result = strategy.generate_batch(inp)
     assert result.candidates[0].test_name == "cached"
@@ -230,7 +302,6 @@ def test_disable_agentic_context_returns_empty():
         system_prompt="sys",
         task_prompt="task",
         function_path="test_func",
-        disable_agentic_context=True,
     )
     result = strategy.generate_batch(inp)
     assert result.candidates[0].test_name == "disabled"

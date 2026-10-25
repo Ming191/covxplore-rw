@@ -55,8 +55,8 @@ def test_candidate_limits_match_reasoning_schema():
     direct = PromptBuilder(get_variant("none")).task_description(**common)
     path = PromptBuilder(get_variant("path_guided")).task_description(**common)
 
-    assert "Return 1-8 focused candidates and omit path metadata." in direct
-    assert "Return 2-5 candidates with distinct path_id and compact expected_path" in path
+    assert "Return 1-4 focused candidates and omit path metadata." in direct
+    assert "Return 1-4 candidates with distinct path_id and compact expected_path" in path
     assert "Suite coverage progress" not in direct
     assert "Each returned batch is executed once" in direct
 

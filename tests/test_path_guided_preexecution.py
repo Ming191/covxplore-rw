@@ -12,6 +12,16 @@ def _candidate(name, path):
     )
 
 
+def test_prunes_unknown_node_ids_before_execution():
+    valid = _candidate("valid", [(6, "FALSE")])
+    invalid = _candidate("invalid", [(4, "TRUE")])
+
+    result = PathGuidance.prune([valid, invalid], allowed_node_ids={6, 10})
+
+    assert result.kept == [valid]
+    assert result.rejected[0].diagnostic.startswith("UNKNOWN_NODE_ID: invalid")
+
+
 def test_prunes_duplicate_and_proper_prefix_before_execution():
     short = _candidate("short", [(6, "FALSE"), (55, "FALSE")])
     duplicate = _candidate("duplicate", [(6, "FALSE"), (55, "FALSE")])

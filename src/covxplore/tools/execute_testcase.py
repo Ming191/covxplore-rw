@@ -255,10 +255,6 @@ def _format_batch_summary(
         )
 
     scored = scored_results or accepted
-    harness_feedback = PathGuidance.harness_repair_feedback(scored)
-    if harness_feedback:
-        lines.extend(["", harness_feedback])
-
     path_feedback = PathGuidance.mismatch_feedback(scored)
     if path_feedback:
         lines.extend(["", path_feedback])

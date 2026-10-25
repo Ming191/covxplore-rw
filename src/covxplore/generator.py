@@ -72,7 +72,7 @@ class GenerationConfig:
     fail_streak_limit: int = field(
         default_factory=lambda: get_settings().fail_streak_limit
     )
-    disable_agentic_context: bool = False
+    disable_agentic_context: bool = True
     run_id: str | None = None
 
     def __post_init__(self):

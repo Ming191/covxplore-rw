@@ -44,7 +44,7 @@ class PromptBuilder:
             batch_requirement = technique_text("path_guided", "batch_requirement")
         else:
             workflow = str(load_catalog()["workflow"])
-            batch_requirement = "Return 1-8 focused candidates and omit path metadata."
+            batch_requirement = "Return 1-4 focused candidates and omit path metadata."
 
         parts = [
             catalog_text("task", "description").format(

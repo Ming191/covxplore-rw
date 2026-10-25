@@ -9,7 +9,8 @@ from typing import TypeVar
 from crewai import LLM
 from pydantic import BaseModel
 
-from covxplore.agents.schemas import GenerateTestBatchAction
+from covxplore.agents.schemas import GenerateTestBatchAction, PathGuidedTestAction
+from covxplore.generation.path_guidance import PathGuidance
 from covxplore.llm import build_llm
 from covxplore.prompts.catalog import catalog_text
 from covxplore.prompts.config import ReasoningTechnique
@@ -33,7 +34,7 @@ class ReasoningInput:
     function_path: str = ""
     execution_feedback_text: str | None = None
     cached_context_evidence: str | None = None
-    disable_agentic_context: bool = False
+    disable_agentic_context: bool = True
 
 
 class ReasoningStrategy(ABC):
@@ -157,34 +158,21 @@ class PathGuidedStrategy(ReasoningStrategy):
 
         if not conditions:
             logger.warning("AkaUT returned no conditions, falling back to ChainOfThought")
-            return ChainOfThoughtStrategy(self.llm).generate_batch(reasoning_input)
+            return self._fallback_cot(reasoning_input)
+
+        allowed_node_ids = {cond.node_id for cond in conditions if cond.node_id is not None}
+        if not allowed_node_ids:
+            logger.warning("AkaUT conditions lacked node ids, falling back to ChainOfThought")
+            return self._fallback_cot(reasoning_input)
 
         uncovered_targets = _uncovered_targets(reasoning_input.task_prompt)
-        catalog_lines: list[str] = []
-        for i, cond in enumerate(conditions):
-            node_id = cond.node_id
-            if node_id is None:
-                continue
-            t_status = (
-                "UNCOVERED"
-                if not uncovered_targets or (node_id, "TRUE") in uncovered_targets
-                else "COVERED"
-            )
-            f_status = (
-                "UNCOVERED"
-                if not uncovered_targets or (node_id, "FALSE") in uncovered_targets
-                else "COVERED"
-            )
-            catalog_lines.append(
-                f"- [N{i + 1}] Node {node_id} (Line ~{cond.line_in_function}): "
-                f"`{cond.condition}` -> TRUE [{t_status}], FALSE [{f_status}]"
-            )
+        catalog_lines = [
+            _format_catalog_line(cond, uncovered_targets)
+            for cond in conditions
+            if cond.node_id is not None
+        ]
 
-        if not catalog_lines:
-            logger.warning("AkaUT conditions lacked node ids, falling back to ChainOfThought")
-            return ChainOfThoughtStrategy(self.llm).generate_batch(reasoning_input)
-
-        prompt = "\n\n".join(
+        base_prompt = "\n\n".join(
             (
                 self._prompt_with_context(reasoning_input, context),
                 catalog_text("reasoning", "path_guided").format(
@@ -193,15 +181,64 @@ class PathGuidedStrategy(ReasoningStrategy):
             )
         )
 
+        planned = self._plan_paths(reasoning_input, base_prompt)
+        kept = self._keep_known_nodes(planned.to_actions(), allowed_node_ids)
+        if not kept:
+            repair_prompt = (
+                f"{base_prompt}\n\n"
+                "PREVIOUS expected_path values used ids that are NOT in the catalog. "
+                f"Allowed nodeId values only: {sorted(allowed_node_ids)}. "
+                "Regenerate candidates using only those nodeId values in expected_path."
+            )
+            planned = self._plan_paths(
+                reasoning_input,
+                repair_prompt,
+                stage="self_proposed_path_planning_repair",
+            )
+            kept = self._keep_known_nodes(planned.to_actions(), allowed_node_ids)
+
+        if not kept:
+            logger.warning(
+                "Path-guided candidates used unknown nodeIds after repair; falling back to CoT"
+            )
+            return self._fallback_cot(reasoning_input)
+
+        return GenerateTestBatchAction(candidates=kept)
+
+    def _plan_paths(
+        self,
+        reasoning_input: ReasoningInput,
+        prompt: str,
+        *,
+        stage: str = "self_proposed_path_planning",
+    ) -> PathGuidedPlanningResult:
         result = self._json_call(
             prompt,
             PathGuidedPlanningResult,
             reasoning_input.system_prompt,
         )
-        self.reasoning_trace.append(
-            {"stage": "self_proposed_path_planning", "content": result.reasoning}
-        )
-        return GenerateTestBatchAction(candidates=result.to_actions())
+        self.reasoning_trace.append({"stage": stage, "content": result.reasoning})
+        return result
+
+    def _keep_known_nodes(
+        self,
+        candidates: list[PathGuidedTestAction],
+        allowed_node_ids: set[int],
+    ) -> list[PathGuidedTestAction]:
+        pruned = PathGuidance.prune(list(candidates), allowed_node_ids=allowed_node_ids)
+        if pruned.rejected:
+            detail = "; ".join(item.diagnostic for item in pruned.rejected)
+            self.reasoning_trace.append(
+                {"stage": "expected_path_node_validation", "content": detail}
+            )
+            logger.info("Dropped path-guided candidates with unknown nodeIds: %s", detail)
+        return [candidate for candidate in pruned.kept if isinstance(candidate, PathGuidedTestAction)]
+
+    def _fallback_cot(self, reasoning_input: ReasoningInput) -> GenerateTestBatchAction:
+        cot = ChainOfThoughtStrategy(self.llm)
+        batch = cot.generate_batch(reasoning_input)
+        self.reasoning_trace.extend(cot.reasoning_trace)
+        return batch
 
 
 
@@ -218,6 +255,24 @@ def get_reasoning_strategy(
     context_tools: AkaUTContextTools | None = None,
 ) -> ReasoningStrategy:
     return _STRATEGIES[technique](llm, context_tools)
+
+
+def _format_catalog_line(cond, uncovered_targets: set[tuple[int, str]]) -> str:
+    node_id = cond.node_id
+    t_status = (
+        "UNCOVERED"
+        if not uncovered_targets or (node_id, "TRUE") in uncovered_targets
+        else "COVERED"
+    )
+    f_status = (
+        "UNCOVERED"
+        if not uncovered_targets or (node_id, "FALSE") in uncovered_targets
+        else "COVERED"
+    )
+    return (
+        f"- nodeId={node_id} | `{cond.condition}` | "
+        f"TRUE [{t_status}], FALSE [{f_status}]"
+    )
 
 
 def _uncovered_targets(feedback: str | None) -> set[tuple[int, str]]:

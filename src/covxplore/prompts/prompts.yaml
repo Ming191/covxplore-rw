@@ -22,13 +22,13 @@ sections:
     test_body_lines is raw C++ inserted into AkaUT's harness:
     1. Do not include headers, main(), namespace declarations, type definitions, or assertions.
     2. The harness declares no variables; declare every value used.
-    3. Use the exact function signature and qualify namespace symbols. Enum and flag constants belong on the focal class (e.g. `tinyxml2::StrPair::NEEDS_FLUSH`), not on the namespace alone (`tinyxml2::NEEDS_FLUSH` is wrong).
+    3. Use the exact function signature and qualify namespace symbols. Enum and flag constants belong on the focal class (e.g. `ClassName::CONSTANT`), not on the namespace alone.
     4. Prefer `char name[] = {...};` or `std::string name = "...";` for string input. Do not use C++ raw string literals (no `R"(...)"` / `R"delim(...)delim"`).
     5. Match the input variable type to its length/access operations. For `const char* txt`, use `std::strlen(txt)` and index with `txt[0]`; only call `.c_str()` and `.size()` on a `std::string`.
     6. AkaUT inserts test_body into a void function. Do not define functions inside test_body; use a non-capturing lambda for a local callback when its expected type permits it. Example: `auto cmp = [](const void* a, const void* b) -> int { return (*(const int*)a - *(const int*)b); };`. Do not use assertions or return with a value; call the focal function for coverage and discard its return value. Call non-static methods through a declared object, never Type::method(...).
 
     Valid JSON candidate example (adapt symbols and call the focal function):
-    {"test_name":"simple_string","test_body_lines":["char txt[] = {'a','b','c',0};","tinyxml2::StrPair sp;","sp.Set(txt, txt + 3, tinyxml2::StrPair::NEEDS_FLUSH);","sp.GetStr();"]}
+    {"test_name":"sample_test","test_body_lines":["char txt[] = {'a','b','c',0};","FocalClass obj;","obj.SetData(txt, 3);","obj.Process();"]}
 
   harness: |
     test_body is raw C++ inserted into AkaUT's harness:
@@ -45,15 +45,14 @@ techniques:
       expected_path is a compact string of nodeId+T/F steps joined by '-', e.g. "42T-55F".
     workflow: >-
       Use the preloaded context, focal source, prior execution feedback, coverage gaps, and
-      the branch-node catalog. Plan feasible end-to-end paths first, then synthesize tests.
-      When prior feedback has HARNESS REPAIR or Failed execution logs, repair those bodies
-      (same path_id/expected_path) before proposing new paths.
+      the branch-node catalog. Plan feasible end-to-end paths first, then synthesize tests
+      that cover uncovered branches. Prefer new distinct paths over revisiting failed ones.
     batch_requirement: >-
-      Return 2-5 candidates with distinct path_id and compact expected_path (e.g. 6T-10F).
+      Return 1-4 candidates with distinct path_id and compact expected_path (e.g. 6T-10F).
 
 workflow: >-
   Use the complete preloaded context, focal source, prior execution feedback, and current coverage gaps.
-  Return 3-8 focused candidates; use fewer only when fewer useful candidates remain.
+  Return 1-4 focused candidates; use fewer only when fewer useful candidates remain.
 
 coverage:
   no_tests: >-
@@ -101,12 +100,6 @@ reasoning:
     {node_catalog}
 
     INSTRUCTIONS:
-    0. HARNESS FIRST (when PRIOR EXECUTION FEEDBACK has HARNESS REPAIR or Failed execution logs):
-       - Repair those test bodies before proposing new paths.
-       - Keep the same path_id and expected_path; only change test_body_lines.
-       - Qualify every type/symbol with its namespace (e.g. tinyxml2::XMLNode, not bare XMLNode).
-       - Use focal-class constants (e.g. tinyxml2::StrPair::NEEDS_FLUSH), never namespace-only names like tinyxml2::NEEDS_FLUSH.
-       - Follow the harness contract in the system prompt; compile errors beat path planning.
     1. PATH PROPOSAL & FEASIBILITY ANALYSIS (In reasoning):
        - Analyze the focal function source and the catalog entries above.
        - Eliminate INFEASIBLE paths (contradictory states, mutually exclusive conditions, unreachable branches).

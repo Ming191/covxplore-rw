@@ -50,7 +50,7 @@ class PathGuidedTestAction(GenerateTestAction):
 class PathGuidedTestBatchAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    candidates: list[PathGuidedTestAction] = Field(..., min_length=1, max_length=5)
+    candidates: list[PathGuidedTestAction] = Field(..., min_length=1, max_length=8)
 
 
 class GenerateTestBatchAction(BaseModel):

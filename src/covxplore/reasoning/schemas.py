@@ -33,7 +33,7 @@ class GeneratedTestAction(_StrictModel):
 
 
 class GeneratedTestBatchResult(_StrictModel):
-    candidates: list[GeneratedTestAction] = Field(..., min_length=1, max_length=8)
+    candidates: list[GeneratedTestAction] = Field(..., min_length=1, max_length=4)
 
     def to_actions(self) -> list[GenerateTestAction]:
         return [candidate.to_action() for candidate in self.candidates]
@@ -69,7 +69,7 @@ class PathGuidedGeneratedAction(_StrictModel):
 
 class PathGuidedPlanningResult(_StrictModel):
     reasoning: str = Field(..., min_length=1)
-    candidates: list[PathGuidedGeneratedAction] = Field(..., min_length=2, max_length=5)
+    candidates: list[PathGuidedGeneratedAction] = Field(..., min_length=1, max_length=4)
 
     def to_actions(self) -> list[PathGuidedTestAction]:
         return [candidate.to_action() for candidate in self.candidates]
